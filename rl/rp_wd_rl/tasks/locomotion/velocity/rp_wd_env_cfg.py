@@ -482,6 +482,7 @@ class RPWDFlatEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
         # 大量刚体接触 (4 轮 + 地面) 时需要更大的 GPU patch 缓冲
+        # 接触多时的 patch 容量 (崎岖地形实测: 该值 10->20 倍无收益, 瓶颈是三角网格窄相检测)
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
         if self.scene.contact_forces is not None:
             self.scene.contact_forces.update_period = self.sim.dt

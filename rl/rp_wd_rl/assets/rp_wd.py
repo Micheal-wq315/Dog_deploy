@@ -44,7 +44,10 @@ RP_WD_CFG = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             # 自碰撞保持关闭: 与 USD 转换时的 self_collision=false 一致, 且轮/小腿贴近时易抖动
             enabled_self_collisions=False,
-            solver_position_iteration_count=8,
+            # 4 = Isaac Lab 默认值。曾用 8 (想让轮子连续接触更稳), 但在崎岖地形上
+            # 接触数暴增时这一项要吃掉约 2x 的求解时间 (实测 7.4 -> 约 4 s/迭代)。
+            solver_position_iteration_count=4,
+            # 保留 1 次速度迭代: 轮子长时间贴地的滚动接触靠它稳住
             solver_velocity_iteration_count=1,
         ),
     ),

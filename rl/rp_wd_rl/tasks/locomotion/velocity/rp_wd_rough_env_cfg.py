@@ -73,6 +73,11 @@ RPWD_ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
             proportion=0.2,
             noise_range=(0.01, 0.04),
             noise_step=0.01,
+            # downsampled_scale > horizontal_scale 会把噪声**平滑**到更大的尺度上。
+            # 用默认值(0.1 m)时地面是 1 cm 级的碎尖刺, 轮子压上去会产生大量接触面
+            # (PhysX 求解量暴增, 实测占地形训练耗时的大头), 对轮子也不真实 ——
+            # 轮子要的是"起伏", 不是"尖刺"。
+            downsampled_scale=0.3,
             border_width=0.25,
         ),
         # 上坡 / 下坡: 15–20° 盲走可靠, 22°+ 收益递减
