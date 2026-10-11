@@ -38,6 +38,8 @@ parser.add_argument("--max_steps", type=int, default=0, help="总步数上限 (0
 parser.add_argument("--log_interval", type=int, default=25, help="每隔多少步打印一行指标 (25 步 = 0.5 s).")
 parser.add_argument("--train-dist", action="store_true", default=False, help="用训练配置 (含域随机化+观测噪声) 测鲁棒性.")
 parser.add_argument("--rough", action="store_true", default=False, help="在崎岖地形上测试/遥控 (随机地形).")
+parser.add_argument("--terrain-level", type=int, default=None,
+                    help="崎岖地形难度等级 0-5 (0=最易, 5=最难); 默认用 Play 配置里的 2 级.")
 parser.add_argument("--export", action="store_true", default=False, help="同时导出 ONNX 到 rl/exported/.")
 parser.add_argument(
     "--teleop", type=str, default=None, choices=["gamepad", "keyboard"],
@@ -294,6 +296,9 @@ def main() -> None:
     agent_cfg = load_cfg_from_registry(task, "rsl_rl_cfg_entry_point")
 
     env_cfg.scene.num_envs = args_cli.num_envs
+    if args_cli.terrain_level is not None and args_cli.rough:
+        # 把地形难度钉死 (Play 配置下没有课程, max_init_terrain_level 就是固定难度)
+        env_cfg.scene.terrain.max_init_terrain_level = args_cli.terrain_level
     if args_cli.experiment_name is not None:
         agent_cfg.experiment_name = args_cli.experiment_name
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
@@ -305,7 +310,10 @@ def main() -> None:
     else:
         ckpt = get_checkpoint_path(os.path.join(LOG_ROOT, agent_cfg.experiment_name), ".*", "model_.*.pt")
     print(f"[INFO] 模型: {ckpt}")
-    print(f"[INFO] 任务: {task} ({'训练分布, 含域随机化' if args_cli.train_dist else 'Play, 无随机化'})")
+    _lvl = getattr(args_cli, "terrain_level", None)
+    _lvl = _lvl if _lvl is not None else getattr(env_cfg.scene.terrain, "max_init_terrain_level", None)
+    _info = f" (地形难度: {_lvl} 级)" if args_cli.rough else ""
+    print(f"[INFO] 任务: {task} ({'训练分布, 含域随机化' if args_cli.train_dist else 'Play, 无随机化'}){_info}")
     env_cfg.log_dir = os.path.dirname(ckpt)
 
     # ---- 环境 + 策略 ----

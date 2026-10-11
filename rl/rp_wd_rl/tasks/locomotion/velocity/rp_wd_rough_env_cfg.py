@@ -17,6 +17,7 @@ from __future__ import annotations
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.utils import configclass
 
@@ -146,6 +147,16 @@ class RPWDRoughEnvCfg(RPWDFlatEnvCfg):
         # 爬阶时小腿(KENN)蹭地是合法的, 阈值 1 N -> 5 N
         self.rewards.undesired_contacts.params["threshold"] = 5.0
 
+        # ---- 4) 终止条件修正 (关键 bug) ----
+        # 平地版用的是"世界绝对高度 < 0.18 m"; 生成地形的各地块平台高度不同
+        # (实测 36 块从 -0.36 到 +0.40 m), 落在低处的环境会**一出生就被判死** ——
+        # 实测 Play 里回合长度中位数 1 步、训练里 root_height 终止占 14-16%
+        # (白白浪费约 1/3 的样本并扭曲地形课程)。改成相对本环境地形原点的高度。
+        self.terminations.root_height = DoneTerm(
+            func=mdp.root_height_below_local_minimum,
+            params={"minimum_height": 0.18},
+        )
+
 
 @configclass
 class RPWDRoughEnvCfg_PLAY(RPWDRoughEnvCfg):
@@ -165,8 +176,11 @@ class RPWDRoughEnvCfg_PLAY(RPWDRoughEnvCfg):
         self.events.sensor_bias = None
         self.events.push_robot = None
 
-        # 测试/演示不要课程: 地形全难度随机出现, 指令范围直接用契约满额 (±2.0 / ±1.0)
-        self.scene.terrain.max_init_terrain_level = None
+        # 测试/演示: 关地形课程, 指令范围用契约满额.
+        # 难度**默认钉在 2 级** (策略实际训练到的水平) —— 之前设 None(全难度随机, 含最难的 5 级)
+        # 会让测试结果被"在硬地形上一出生就摔"的样本淹没. 想探边界就用
+        # test_policy.sh --rough --terrain-level 5
+        self.scene.terrain.max_init_terrain_level = 2
         self.scene.terrain.terrain_generator.curriculum = False
         self.curriculum.terrain_levels = None
         self.curriculum.command_lin_vel = None
