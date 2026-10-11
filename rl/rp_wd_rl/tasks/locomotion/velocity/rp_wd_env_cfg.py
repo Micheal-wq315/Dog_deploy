@@ -20,6 +20,7 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
@@ -315,17 +316,18 @@ class RewardsCfg:
     # ---- 任务 ----
     # 权重给足: 跟踪必须是回报的主要来源, 否则"站着不动"或"早点摔倒"会成为局部最优.
     # (实测教训: 早期跟踪 0.5/回合 而惩罚合计 -5/回合, 策略 280 迭代时学会了摔倒)
-    # σ 随指令范围放大: 经验取 σ ≈ 0.5×最大指令. 原来 ±0.6 m/s 时 σ=0.4,
-    # 提到 ±2.0 m/s 后若仍用 0.4, 误差 >0.8 m/s 就几乎无梯度, 高速段学不动.
+    # σ 的取法: 配合**指令课程**用 0.5 —— 课程负责"从窄到宽"避免远处没梯度,
+    # σ 负责"近处梯度够陡". (曾试过 σ=1.0 直接上 ±2.0: 奖励地形被抹平,
+    # 策略卡在 error≈1.9 m/s 平了 400+ 迭代.)
     track_lin_vel_xy_exp = RewTerm(
         func=mdp.track_lin_vel_xy_exp,
         weight=1.5,
-        params={"command_name": "base_velocity", "std": 1.0},
+        params={"command_name": "base_velocity", "std": 0.5},
     )
     track_ang_vel_z_exp = RewTerm(
         func=mdp.track_ang_vel_z_exp,
         weight=1.0,
-        params={"command_name": "base_velocity", "std": 1.0},
+        params={"command_name": "base_velocity", "std": 0.5},
     )
 
     # ---- 姿态与平顺 ----
@@ -408,6 +410,28 @@ class RewardsCfg:
 
 
 ##
+# 课程学习
+##
+
+
+@configclass
+class CurriculumCfg:
+    """指令范围课程: 直线速度从 ±0.7 起步, 随训练放大到契约满额 (±2.0 m/s)."""
+
+    command_lin_vel = CurrTerm(
+        func=mdp.command_lin_vel_curriculum,
+        params={
+            "command_name": "base_velocity",
+            "start_scale": 0.35,      # ±0.7 m/s 起步, 与上一个稳定版本 (rolling_v4) 的能力衔接
+            "end_scale": 1.0,         # 最终必须覆盖契约满额, 否则实机手柄一推就出分布
+            "warmup_steps": 240,      # ≈10 迭代
+            "ramp_steps": 24000,      # ≈1000 迭代 (1 迭代 = 24 策略步)
+            "ramp_angular": False,    # 角速度一直保持满额 (实测偏航跟踪本就很好)
+        },
+    )
+
+
+##
 # 终止条件
 ##
 
@@ -444,6 +468,7 @@ class RPWDFlatEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
         # 策略频率: 1 / (0.0025 × 8) = 50 Hz —— 必须与部署端 dt × decimation 一致
