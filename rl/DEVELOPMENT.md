@@ -307,6 +307,7 @@ GPU 利用率 1%、**空转 12.8 小时**只跑到 101/3000。journal 无 OOM �
 
 | 日期 | 版本 | 内容 |
 |---|---|---|
+| 2026-10-11 | v7 | **新增 DJI 手柄 ROS2 发布者**（`src/inference/scripts/dji_pad_publisher.py`）：evdev 直读 DJI Virtual Joystick（USB `2ca3:1021`），发 Xbox 兼容 `/joy` + `/dji_pad/cmd_vel` 控制量。轴/按键数组**固定补齐到 8**，因 `inference_node.hpp` 无越界检查地读 `axes[2..5]`/`buttons[0..5]`，而该手柄实测只有 5 轴 8 键（描述符声明 24 键，实际仅 usage 1..8 存在）。轴映射：左杆=ABS_Z(纵,不回中)/ABS_RX(横)、右杆=ABS_X/ABS_Y、拨轮=ABS_RY，5 轴行程均满量程 ±660；转向按订阅端 LT/RT 分支语义拆到 `axes[2]/axes[5]` 两半，静止两路皆 0。QoS 钉成 best_effort+KeepLast(1) 以匹配订阅端；掉线自动重连并强制发零 |
 | 2026-10-11 | v6 | **修复崎岖地形严重 bug**：`root_height` 终止由"世界绝对高度"改为"相对地形原点高度"（修复前 1/3 样本出生即死、地形课程假天花板 2.2 级）；新增 `--terrain-level` 分层测试开关；Play 默认难度钉在 2 级 |
 | 2026-10-11 | v5 | 首轮地形训练启动（挂夜跑 5000 迭代）；地形性能调查结论记档（瓶颈=三角网格碰撞，三项调参无效已回退）；`solver_position_iteration_count` 8→4；`random_rough` 平滑化 |
 | 2026-10-11 | v4 | 指令范围定版 (vx ±1.0 / vy ±0.6 / wz ±1.0, 部署端已同步) + 首轮地形训练 (热启动自提速模型); 修 train.py 两处: 自动建实验目录、支持绝对路径 `--load_run` 跨实验热启动 |
