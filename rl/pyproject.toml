@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rp_wd_rl"
+version = "0.1.0"
+description = "Isaac Lab RL training project for the RP_wd 16-DOF wheel-legged robot"
+readme = "README.md"
+requires-python = ">=3.10"
+# 依赖由 isaaclab conda 环境提供 (isaaclab / isaaclab_tasks / isaaclab_rl / rsl-rl-lib),
+# 这里不声明, 避免 pip 试图从 PyPI 拉取不兼容版本.
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["rp_wd_rl*"]

@@ -1,0 +1,660 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (C) 2025-2026 Luo1imasi
+
+#include "inference_node.hpp"
+
+// ============================================================================
+// load_config — 从 YAML 配置文件加载所有推理参数并初始化策略列表
+//
+// 配置来源有两层:
+//   1. launch 文件中的 ROS2 parameter override (如 policy_name, robot_name)
+//   2. robots/<robot>/configs/<policy>.yaml 中的详细参数
+//
+// 配置中多个策略用平行数组描述，第 i 个元素对应第 i 个策略:
+//   model_names[i]        →  ONNX 模型文件名
+//   motion_names[i]       →  运动轨迹 NPZ 文件 (可为空)
+//   obs_layouts[i]        →  观测分量布局字符串
+//   frame_stacks[i]       →  保留多少帧历史
+//   obs_stack_orders[i]   →  帧排列方式 (frame_major / obs_major)
+// ============================================================================
+void InferenceNode::load_config() {
+    // ── 声明 ROS2 参数及其默认值 ──────────────────────────────────────────
+    // 通过 declare_parameter 注册所有可配置参数，后续由 YAML/launch 覆盖
+    const std::string default_robot_dir = std::string(ROOT_DIR) + "robots/wheel_quad";
+    this->declare_parameter<std::string>("robot_name", "wheel_quad");
+    this->declare_parameter<std::string>("policy_name", "default");
+    this->declare_parameter<std::string>("robot_config", default_robot_dir + "/robot.yaml");
+    this->declare_parameter<std::string>("model_dir", default_robot_dir + "/models");
+    this->declare_parameter<std::string>("motion_dir", default_robot_dir + "/motions");
+    this->declare_parameter<std::vector<std::string>>("model_names", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("motion_names", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("obs_layouts", std::vector<std::string>{});
+    this->declare_parameter<std::vector<std::string>>("extra_obs_layouts", std::vector<std::string>{});
+    this->declare_parameter<std::vector<long int>>("frame_stacks", std::vector<long int>{});
+    this->declare_parameter<std::vector<std::string>>("obs_stack_orders", std::vector<std::string>{});
+    this->declare_parameter<float>("act_alpha", 0.9);
+    this->declare_parameter<int>("intra_threads", -1);
+    this->declare_parameter<std::string>("perception_obs_topic", "elevation_data");
+    this->declare_parameter<int>("joint_num", 16);
+    this->declare_parameter<int>("decimation", 8);
+    this->declare_parameter<float>("dt", 0.0025);
+    this->declare_parameter<float>("obs_scales_lin_vel", 1.0);
+    this->declare_parameter<float>("obs_scales_ang_vel", 1.0);
+    this->declare_parameter<float>("obs_scales_dof_pos", 1.0);
+    this->declare_parameter<float>("obs_scales_dof_vel", 1.0);
+    this->declare_parameter<float>("obs_scales_gravity_b", 1.0);
+    this->declare_parameter<float>("clip_observations", 100.0);
+    this->declare_parameter<std::vector<double>>("action_scales", std::vector<double>{});
+    this->declare_parameter<std::vector<long int>>("wheel_joint_indices", std::vector<long int>{});
+    this->declare_parameter<float>("clip_actions", 10.0);
+    this->declare_parameter<std::vector<long int>>("usd2urdf", std::vector<long int>{});
+    this->declare_parameter<std::vector<double>>("clip_cmd", std::vector<double>{});
+    this->declare_parameter<std::vector<double>>("joint_default_angle", std::vector<double>{});
+    this->declare_parameter<std::vector<double>>("joint_limits", std::vector<double>{});
+    this->declare_parameter<float>("gravity_z_upper", -0.5);
+
+    // ── 从 ROS2 参数服务器读取实际值 ─────────────────────────────────────
+    std::vector<std::string> model_names;
+    std::vector<std::string> motion_names;
+    std::vector<std::string> obs_layouts;
+    std::vector<std::string> extra_obs_layouts;
+    std::vector<long int> frame_stacks;
+    std::vector<std::string> obs_stack_orders;
+    std::string robot_name;
+    std::string policy_name;
+    std::string model_dir;
+    std::string motion_dir;
+    this->get_parameter("robot_name", robot_name);
+    this->get_parameter("policy_name", policy_name);
+    this->get_parameter("robot_config", robot_config_path_);
+    this->get_parameter("model_dir", model_dir);
+    this->get_parameter("motion_dir", motion_dir);
+    this->get_parameter("model_names", model_names);
+    this->get_parameter("motion_names", motion_names);
+    this->get_parameter("obs_layouts", obs_layouts);
+    this->get_parameter("extra_obs_layouts", extra_obs_layouts);
+    this->get_parameter("frame_stacks", frame_stacks);
+    this->get_parameter("obs_stack_orders", obs_stack_orders);
+    this->get_parameter("act_alpha", act_alpha_);
+    this->get_parameter("intra_threads", intra_threads_);
+    this->get_parameter("perception_obs_topic", perception_obs_topic_);
+    this->get_parameter("joint_num", joint_num_);
+    this->get_parameter("decimation", decimation_);
+    this->get_parameter("dt", dt_);
+    this->get_parameter("obs_scales_lin_vel", obs_scales_lin_vel_);
+    this->get_parameter("obs_scales_ang_vel", obs_scales_ang_vel_);
+    this->get_parameter("obs_scales_dof_pos", obs_scales_dof_pos_);
+    this->get_parameter("obs_scales_dof_vel", obs_scales_dof_vel_);
+    this->get_parameter("obs_scales_gravity_b", obs_scales_gravity_b_);
+    this->get_parameter("clip_observations", clip_observations_);
+    this->get_parameter("action_scales", action_scales_);
+    this->get_parameter("wheel_joint_indices", wheel_joint_indices_);
+    this->get_parameter("clip_actions", clip_actions_);
+    this->get_parameter("usd2urdf", usd2urdf_);
+    this->get_parameter("clip_cmd", clip_cmd_);
+    this->get_parameter("joint_default_angle", joint_default_angle_);
+    this->get_parameter("joint_limits", joint_limits_);
+    this->get_parameter("gravity_z_upper", gravity_z_upper_);
+
+    // ── 校验动作缩放数组长度 (必须与关节数一致) ────────────────────────
+    if (action_scales_.size() != static_cast<size_t>(joint_num_)) {
+        throw std::runtime_error("action_scales must have size " + std::to_string(joint_num_));
+    }
+
+    // ── 清空旧策略列表，准备重建 ─────────────────────────────────────────
+    policies_.clear();
+    perception_obs_num_ = 0;
+    const size_t policy_count = model_names.size();
+    if (policy_count == 0) {
+        throw std::runtime_error("model_names must contain at least one policy");
+    }
+
+    // ── 校验平行数组长度 ─────────────────────────────────────────────────
+    // 每个策略必须有一组对应的配置参数，数组长度必须与 model_names 一致
+    // require_policy_count:     必填字段，长度必须等于策略数
+    // require_empty_or_policy_count: 可选字段，为空或长度等于策略数
+    const auto require_policy_count = [policy_count](const auto& values, const std::string& name) {
+        if (values.size() != policy_count) {
+            throw std::runtime_error(name + " must have the same size as model_names");
+        }
+    };
+    const auto require_empty_or_policy_count = [policy_count](const auto& values, const std::string& name) {
+        if (!values.empty() && values.size() != policy_count) {
+            throw std::runtime_error(name + " must be empty or have the same size as model_names");
+        }
+    };
+    require_policy_count(obs_layouts, "obs_layouts");
+    require_empty_or_policy_count(extra_obs_layouts, "extra_obs_layouts");
+    require_policy_count(frame_stacks, "frame_stacks");
+    require_policy_count(obs_stack_orders, "obs_stack_orders");
+    require_empty_or_policy_count(motion_names, "motion_names");
+
+    // ── 资源路径解析 lambda ──────────────────────────────────────────────
+    // 若 asset_name 是绝对路径则直接使用，否则拼接 base_dir
+    const auto resolve_asset_path = [](const std::string& base_dir, const std::string& asset_name) {
+        const std::filesystem::path asset_path(asset_name);
+        if (asset_path.is_absolute()) {
+            return asset_path.string();
+        }
+        return (std::filesystem::path(base_dir) / asset_path).lexically_normal().string();
+    };
+
+    // ── 逐策略解析配置并构建 PolicyRuntime ───────────────────────────────
+    for (size_t i = 0; i < policy_count; i++) {
+        const std::string& policy_model_name = model_names[i];
+        const std::string policy_motion_name = motion_names.empty() ? "" : motion_names[i];
+        const std::string policy_extra_obs_layout = extra_obs_layouts.empty() ? "" : extra_obs_layouts[i];
+        const int policy_frame_stack = static_cast<int>(frame_stacks[i]);
+        const std::string& policy_obs_stack_order_name = obs_stack_orders[i];
+
+        if (policy_model_name.empty()) {
+            throw std::runtime_error("model_names[" + std::to_string(i) + "] must not be empty");
+        }
+        if (policy_frame_stack <= 0) {
+            throw std::runtime_error("frame_stacks[" + std::to_string(i) + "] must be positive");
+        }
+
+        PolicyRuntime policy;
+        policy.name = policy_model_name;
+        policy.model_path = resolve_asset_path(model_dir, policy_model_name);
+        // Motion policy support removed (not used by wheel_quad)
+
+        // 解析主观测布局: "ang_vel:3, gravity_b:3, ..." → vector<ObsSourceSpec>
+        policy.obs_layout = parse_obs_layout(obs_layouts[i], "obs_layouts[" + std::to_string(i) + "]");
+        policy.obs_layout_sizes.reserve(policy.obs_layout.size());
+        for (const ObsSourceSpec& source : policy.obs_layout) {
+            policy.obs_layout_sizes.push_back(source.size);   // 记录每个分量的维度 (用于 ObsMajor 模式)
+            policy.obs_num += source.size;                     // 累加单帧观测总维度
+            if (source.name == "perception") {
+                perception_obs_num_ = source.size;             // 记录感知观测维度 (高度图)
+            }
+        }
+
+        // 解析额外观测布局 (如 attention encoder 的 perception 输入)
+        if (!policy_extra_obs_layout.empty()) {
+            policy.extra_obs_layout = parse_obs_layout(policy_extra_obs_layout,
+                                                       "extra_obs_layouts[" + std::to_string(i) + "]");
+            for (const ObsSourceSpec& source : policy.extra_obs_layout) {
+                policy.extra_obs_num += source.size;
+                if (source.name == "perception") {
+                    perception_obs_num_ = source.size;
+                }
+            }
+        }
+
+        policy.frame_stack = policy_frame_stack;
+        // 将 YAML 字符串 "frame_major" / "obs_major" 转为枚举值
+        policy.stack_order = parse_obs_stack_order(policy_obs_stack_order_name);
+
+        policies_.push_back(std::move(policy));
+    }
+
+    // ── 打印加载结果日志 ─────────────────────────────────────────────────
+    RCLCPP_INFO(this->get_logger(), "robot_name: %s", robot_name.c_str());
+    RCLCPP_INFO(this->get_logger(), "policy_name: %s", policy_name.c_str());
+    RCLCPP_INFO(this->get_logger(), "robot_config: %s", robot_config_path_.c_str());
+    RCLCPP_INFO(this->get_logger(), "model_dir: %s", model_dir.c_str());
+    RCLCPP_INFO(this->get_logger(), "motion_dir: %s", motion_dir.c_str());
+    for (size_t i = 0; i < policies_.size(); i++) {
+        RCLCPP_INFO(this->get_logger(), "policy %zu: %s", i, policies_[i].name.c_str());
+        RCLCPP_INFO(this->get_logger(), "policy_model_path %zu: %s", i, policies_[i].model_path.c_str());
+    }
+    RCLCPP_INFO(this->get_logger(), "act_alpha: %f", act_alpha_);
+    RCLCPP_INFO(this->get_logger(), "intra_threads: %d", intra_threads_);
+    RCLCPP_INFO(this->get_logger(), "supports_interrupt: %s", has_obs_source("interrupt") ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "joint_num: %d", joint_num_);
+    RCLCPP_INFO(this->get_logger(), "decimation: %d", decimation_);
+    RCLCPP_INFO(this->get_logger(), "dt: %f", dt_);
+    RCLCPP_INFO(this->get_logger(), "obs_scales_lin_vel: %f", obs_scales_lin_vel_);
+    RCLCPP_INFO(this->get_logger(), "obs_scales_ang_vel: %f", obs_scales_ang_vel_);
+    RCLCPP_INFO(this->get_logger(), "obs_scales_dof_pos: %f", obs_scales_dof_pos_);
+    RCLCPP_INFO(this->get_logger(), "obs_scales_dof_vel: %f", obs_scales_dof_vel_);
+    RCLCPP_INFO(this->get_logger(), "obs_scales_gravity_b: %f", obs_scales_gravity_b_);
+    RCLCPP_INFO(this->get_logger(), "clip_actions: %f", clip_actions_);
+    print_vector<double>("action_scales", action_scales_);
+    print_vector<long int>("wheel_joint_indices", wheel_joint_indices_);
+    print_vector<long int>("usd2urdf", usd2urdf_);
+    print_vector<double>("clip_cmd", clip_cmd_);
+    print_vector<double>("joint_default_angle", joint_default_angle_);
+    print_vector<double>("joint_limits", joint_limits_);
+    RCLCPP_INFO(this->get_logger(), "gravity_z_upper: %f", gravity_z_upper_);
+}
+
+// ============================================================================
+// subs_joy_callback — 手柄/游戏手柄输入回调
+//
+// 手柄映射 (以常见 Xbox 布局为例):
+//   左摇杆上下  axes[4] → 线速度 x (前进/后退)
+//   左摇杆左右  axes[3] → 线速度 y (左右平移)
+//   LT (axes[2] < 0) 或 RT (axes[5] < 0) → 角速度 z (转向)
+//
+// 按钮功能:
+//   按钮 B (buttons[2]) → 电机初始化/反初始化
+//   按钮 A (buttons[0]) → 复位关节到默认角度
+//   按钮 X (buttons[1]) → 启动/暂停推理
+//   按钮 Y (buttons[3]) → 切换控制源 (手柄 / /cmd_vel)
+//   按钮 LB (buttons[4]) → 切换中断模式 或 运动策略
+//   按钮 RB (buttons[5]) → 切换运动策略 (在多个 motion 策略间轮转)
+//
+// 所有按钮使用边沿检测 (当前按下且上一周期未按下)，防止持续按住时重复触发
+// ============================================================================
+void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg) {
+    // ── 手柄模式: 摇杆值映射到 cmd_vel，并 clamp 到限幅范围 ────────────
+    if (is_joy_control_) {
+        std::unique_lock<std::mutex> lock(cmd_mutex_);
+        // x 方向线速度: 左摇杆上下，clip_cmd_[0]~[1] 限幅
+        cmd_vel_[0] = std::clamp(msg->axes[4] * clip_cmd_[1], clip_cmd_[0], clip_cmd_[1]);
+        // y 方向线速度: 左摇杆左右，clip_cmd_[2]~[3] 限幅
+        cmd_vel_[1] = std::clamp(msg->axes[3] * clip_cmd_[3], clip_cmd_[2], clip_cmd_[3]);
+        // z 方向角速度: LT(倒车) 或 RT(前进) 触发转向
+        if (msg->axes[2] < 0) {
+            cmd_vel_[2] = std::clamp(-msg->axes[2] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
+        } else if (msg->axes[5] < 0) {
+            cmd_vel_[2] = std::clamp(msg->axes[5] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
+        } else {
+            cmd_vel_[2] = 0.0;
+        }
+    }
+
+    // ── 按钮 B (buttons[2]): 电机初始化/反初始化 ─────────────────────────
+    // 先停推理 → 根据当前状态切换 init/deinit
+    if ((msg->buttons[2] == 1 && msg->buttons[2] != last_button0_)) {
+        if (is_running_.load()) {
+            reset_runtime_state();
+            RCLCPP_INFO(this->get_logger(), "Inference paused");
+        }
+        if (robot_->is_init_.load()) {
+            robot_->deinit_motors();
+            RCLCPP_INFO(this->get_logger(), "Motors deinitialized");
+        } else {
+            robot_->init_motors();
+            RCLCPP_INFO(this->get_logger(), "Motors initialized");
+        }
+    }
+
+    // ── 按钮 A (buttons[0]): 平滑站立 (插值过渡到默认姿态) ──────────────
+    if (msg->buttons[0] == 1 && msg->buttons[0] != last_button1_) {
+        if (is_running_.load()) {
+            reset_runtime_state();
+            RCLCPP_INFO(this->get_logger(), "Inference paused");
+        }
+        if (!robot_->is_init_.load()) {
+            RCLCPP_INFO(this->get_logger(), "Motors are not initialized!");
+        } else {
+            robot_->stand_up(joint_default_angle_);
+            RCLCPP_INFO(this->get_logger(), "Stand up completed");
+        }
+    }
+
+    // ── 按钮 X (buttons[1]): 启动/暂停推理 ──────────────────────────────
+    if (msg->buttons[1] == 1 && msg->buttons[1] != last_button2_) {
+        is_running_.store(!is_running_.load());
+        RCLCPP_INFO(this->get_logger(), "Inference %s", is_running_.load() ? "started" : "paused");
+    }
+
+    // ── 按钮 Y (buttons[3]): 切换控制源 (手柄 ↔ /cmd_vel) ──────────────
+    if (msg->buttons[3] == 1 && msg->buttons[3] != last_button3_) {
+        is_joy_control_.store(!is_joy_control_);
+        RCLCPP_INFO(this->get_logger(), "Controlled by %s", is_joy_control_.load() ? "joy" : "/cmd_vel");
+    }
+
+    // ── 按钮 LB (buttons[4]): 切换中断模式 ─────────────────────────
+    if (supports_interrupt()) {
+        if (msg->buttons[4] == 1 && msg->buttons[4] != last_button4_) {
+            const auto switch_while_paused = [this](auto&& switch_mode) {
+                std::unique_lock<std::mutex> switch_lock(lb_switch_mutex_);
+                const bool restore_running = is_running_.exchange(false);
+                if (restore_running) {
+                    RCLCPP_INFO(this->get_logger(), "Inference paused");
+                }
+                try {
+                    switch_mode();
+                } catch (...) {
+                    if (restore_running) {
+                        is_running_.store(true);
+                        RCLCPP_INFO(this->get_logger(), "Inference started");
+                    }
+                    throw;
+                }
+                if (restore_running) {
+                    is_running_.store(true);
+                    RCLCPP_INFO(this->get_logger(), "Inference started");
+                }
+            };
+            switch_while_paused([this]() {
+                std::unique_lock<std::mutex> lock(mode_mutex_);
+                is_interrupt_.store(!is_interrupt_.load());
+                RCLCPP_INFO(this->get_logger(), "Interrupt mode %s",
+                            is_interrupt_.load() ? "enabled" : "disabled");
+            });
+        }
+        last_button4_ = msg->buttons[4];
+    }
+
+    // ── 按钮 RB (buttons[5]): motion policy switching removed ──────
+
+    // 保存本轮按钮状态，供下一周期边沿检测
+    last_button0_ = msg->buttons[2];
+    last_button1_ = msg->buttons[0];
+    last_button2_ = msg->buttons[1];
+    last_button3_ = msg->buttons[3];
+}
+
+// ============================================================================
+// subs_cmd_callback — /cmd_vel 话题回调
+//
+// 在非手柄模式下，接收外部速度指令 (如 ROS2 navigation 或遥操作节点)
+// 直接映射 Twist 消息的 linear.x/y 和 angular.z 到 cmd_vel_ 并 clamp
+// ============================================================================
+void InferenceNode::subs_cmd_callback(const std::shared_ptr<geometry_msgs::msg::Twist> msg) {
+    if (!is_joy_control_) {
+        std::unique_lock<std::mutex> lock(cmd_mutex_);
+        cmd_vel_[0] = std::clamp(msg->linear.x, clip_cmd_[0], clip_cmd_[1]);
+        cmd_vel_[1] = std::clamp(msg->linear.y, clip_cmd_[2], clip_cmd_[3]);
+        cmd_vel_[2] = std::clamp(msg->angular.z, clip_cmd_[4], clip_cmd_[5]);
+    }
+}
+
+// ============================================================================
+// subs_elevation_callback — 感知观测 (高度图/高程数据) 回调
+//
+// 接收外部感知模块发布的地形高程数据 (如 height scan 或 elevation map)
+// 数据存入 perception_obs_buffer_，供后续拼接到 ONNX 输入中
+// 若消息尺寸不足则填充 0 并告警
+// ============================================================================
+void InferenceNode::subs_elevation_callback(const std::shared_ptr<std_msgs::msg::Float32MultiArray> msg) {
+    if (perception_obs_num_ > 0) {
+        std::unique_lock<std::mutex> lock(perception_mutex_);
+        if (msg->data.size() < perception_obs_buffer_.size()) {
+            RCLCPP_WARN(this->get_logger(),
+                        "Perception obs message too small: got %zu, expected %zu",
+                        msg->data.size(), perception_obs_buffer_.size());
+            std::fill(perception_obs_buffer_.begin(), perception_obs_buffer_.end(), 0.0f);
+            return;
+        }
+        std::copy(msg->data.begin(),
+                  msg->data.begin() + perception_obs_buffer_.size(),
+                  perception_obs_buffer_.begin());
+    }
+}
+
+// ============================================================================
+// subs_joint_state_callback — 关节状态回调 (用于中断模式)
+//
+// 中断模式下，外部可以直接发送目标关节位置来覆盖策略输出
+// 此回调将接收到的关节位置存入 interrupt_action_，由 apply_action 使用
+// ============================================================================
+void InferenceNode::subs_joint_state_callback(const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
+    if (supports_interrupt() && is_interrupt_.load()) {
+        std::unique_lock<std::mutex> lock(interrupt_mutex_);
+        for (size_t i = 0; i < interrupt_action_.size(); i++) {
+            interrupt_action_[i] = msg->position[i];
+        }
+    }
+}
+
+// ============================================================================
+// ROS2 Service 回调 — 电机控制与推理管理
+//
+// 提供 10 个 service 供外部节点通过 ROS2 service call 控制机器人:
+//   reset_joints    — 复位关节到默认角度
+//   refresh_joints  — 刷新关节状态
+//   read_joints     — 读取并发布关节状态
+//   read_imu        — 读取并发布 IMU 数据
+//   set_zeros       — 设置关节零点
+//   clear_errors    — 清除电机错误
+//   init_motors     — 初始化电机
+//   deinit_motors   — 反初始化电机
+//   start_inference — 启动推理
+//   stop_inference  — 停止推理
+//
+// 每个 service 都做前置条件检查 (电机是否初始化、推理是否运行中)，
+// 失败时返回 success=false 并附带原因 message
+// ============================================================================
+
+void InferenceNode::reset_joints_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                     std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!robot_->is_init_.load()) {
+        response->success = false;
+        response->message = "Motors are not initialized, cannot reset joints.";
+        return;
+    }
+    if (is_running_.load()) {
+        response->success = false;
+        response->message = "Inference is running, cannot reset joints.";
+        return;
+    }
+    try {
+        robot_->reset_joints(joint_default_angle_);
+        response->success = true;
+        response->message = "Joints reset successfully";
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::stand_up_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                  std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!robot_->is_init_.load()) {
+        response->success = false;
+        response->message = "Motors are not initialized, cannot stand up.";
+        return;
+    }
+    if (is_running_.load()) {
+        response->success = false;
+        response->message = "Inference is running, cannot stand up.";
+        return;
+    }
+    try {
+        robot_->stand_up(joint_default_angle_);
+        response->success = true;
+        response->message = "Stand up completed";
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::refresh_joints_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!robot_->is_init_.load()) {
+        response->success = false;
+        response->message = "Motors are not initialized, cannot refresh motors.";
+        return;
+    }
+    try {
+        robot_->refresh_joints();
+        response->success = true;
+        response->message = "Motors refresh successfully";
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::read_joints_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!robot_->is_init_.load()) {
+        response->success = false;
+        response->message = "Motors are not initialized, cannot read joints.";
+        return;
+    }
+    try {
+        response->success = true;
+        response->message = "Joints read successfully";
+        publish_joint_states();
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::read_imu_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                 std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!robot_) {
+        response->success = false;
+        response->message = "IMU is not initialized, cannot read IMU.";
+        return;
+    }
+    try {
+        response->success = true;
+        response->message = "IMU read successfully";
+        publish_imu();
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::set_zeros_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                  std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!robot_->is_init_.load()) {
+        response->success = false;
+        response->message = "Motors are not initialized, cannot set zeros.";
+        return;
+    }
+    if (is_running_.load()) {
+        response->success = false;
+        response->message = "Inference is running, cannot set zeros.";
+        return;
+    }
+    try {
+        robot_->set_zeros();
+        response->success = true;
+        response->message = "Zeros set successfully";
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::clear_errors_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                     std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!robot_) {
+        response->success = false;
+        response->message = "Robot interface is not initialized, cannot clear errors.";
+        return;
+    }
+    try {
+        robot_->clear_errors();
+        response->success = true;
+        response->message = "Errors cleared successfully";
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::init_motors_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (robot_->is_init_.load()) {
+        response->success = false;
+        response->message = "Motors are already initialized, cannot init motors.";
+        return;
+    }
+    try {
+        robot_->init_motors();
+        response->success = true;
+        response->message = "Motors initialized successfully";
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::deinit_motors_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!robot_->is_init_.load()) {
+        response->success = false;
+        response->message = "Motors are not initialized, cannot deinit motors.";
+        return;
+    }
+    try {
+        robot_->deinit_motors();
+        response->success = true;
+        response->message = "Motors deinitialized successfully";
+    } catch (const std::exception& e) {
+        response->success = false;
+        response->message = e.what();
+    }
+}
+
+void InferenceNode::start_inference_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (is_running_.load()) {
+        response->success = false;
+        response->message = "Inference is already running!";
+        return;
+    }
+    is_running_.store(true);
+    response->success = true;
+    response->message = "Inference started";
+}
+
+void InferenceNode::stop_inference_srv(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (!is_running_.load()) {
+        response->success = false;
+        response->message = "Inference is already stopped!";
+        return;
+    }
+    is_running_.store(false);
+    response->success = true;
+    response->message = "Inference stopped";
+}
+
+// ============================================================================
+// publish_joint_states — 发布 /joint_states 话题
+//
+// 从 RobotInterface 读取当前关节位置、速度、力矩，组装 JointState 消息并发布
+// 用于调试和状态监控
+// ============================================================================
+void InferenceNode::publish_joint_states() {
+    joint_pos_buffer_ = robot_->get_joint_q();
+    joint_vel_buffer_ = robot_->get_joint_vel();
+    joint_torques_buffer_ = robot_->get_joint_tau();
+    joint_state_msg_.header.stamp = this->now();
+    joint_state_msg_.effort.resize(joint_num_);
+    for (int i = 0; i < joint_num_; i++) {
+        joint_state_msg_.position[i] = joint_pos_buffer_[i];
+        joint_state_msg_.velocity[i] = joint_vel_buffer_[i];
+        joint_state_msg_.effort[i] = joint_torques_buffer_[i];
+    }
+    joint_state_publisher_->publish(joint_state_msg_);
+}
+
+// ============================================================================
+// publish_action — 发布 /action 话题
+//
+// 将策略输出的目标关节位置 act_ 发布为 JointState 消息
+// 下游电机控制节点订阅此话题并执行位置控制
+// ============================================================================
+void InferenceNode::publish_action() {
+    action_msg_.header.stamp = this->now();
+    for (int i = 0; i < joint_num_; i++) {
+        action_msg_.position[i] = act_[i];
+    }
+    action_publisher_->publish(action_msg_);
+}
+
+// ============================================================================
+// publish_imu — 发布 /imu 话题
+//
+// 从 RobotInterface 读取四元数姿态和角速度，组装 IMU 消息并发布
+// 用于状态估计和里程计
+// ============================================================================
+void InferenceNode::publish_imu() {
+    quat_buffer_ = robot_->get_quat();
+    ang_vel_buffer_ = robot_->get_ang_vel();
+    auto msg = sensor_msgs::msg::Imu();
+    msg.header.stamp = this->now();
+    msg.orientation.w = quat_buffer_[0];
+    msg.orientation.x = quat_buffer_[1];
+    msg.orientation.y = quat_buffer_[2];
+    msg.orientation.z = quat_buffer_[3];
+    msg.angular_velocity.x = ang_vel_buffer_[0];
+    msg.angular_velocity.y = ang_vel_buffer_[1];
+    msg.angular_velocity.z = ang_vel_buffer_[2];
+    imu_publisher_->publish(msg);
+}

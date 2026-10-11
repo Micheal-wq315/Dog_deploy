@@ -1,0 +1,32 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/src/motors/include",
+                "${workspaceFolder}/src/motors/src",
+                "${workspaceFolder}/src/damiao_imu/include",
+                "${workspaceFolder}/src/damiao_imu/src",
+                "${workspaceFolder}/src/damiao_imu/src/drivers/damiao",
+                "${workspaceFolder}/src/damiao_imu/src/protocol/damiao",
+                "${workspaceFolder}/src/inference/include",
+                "${workspaceFolder}/src/inference/src",
+                "${workspaceFolder}/src/inference/thirdparty/onnxruntime/include",
+                "${workspaceFolder}/build/damiao_imu",
+                "${workspaceFolder}/build/roboparty_motors",
+                "/usr/include/eigen3",
+                "/usr/include",
+                "/opt/ros/jazzy/include/**"
+            ],
+            "defines": [
+                "ROOT_DIR=\"${workspaceFolder}/src/inference/\""
+            ],
+            "compilerPath": "/usr/bin/g++",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}

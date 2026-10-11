@@ -1,0 +1,210 @@
+# RP_wd 强化学习工程开发记录
+
+> 记录 2026-10-10 ~ 10-11 从零搭建这套训练工程的全过程：做了什么、为什么这么做、
+> 踩过哪些坑、每次训练的结论。**后续每次有版本级改动时在文末"版本记录"追加一节。**
+>
+> 快速上手看 [scripts/start.md](scripts/start.md)；契约细节看 [README.md](README.md)。
+
+---
+
+## 1. 工程总览
+
+用 Isaac Lab 2.3.2 + Isaac Sim 5.1 + RSL-RL PPO 训练 RP_wd 四轮足机器人（16 关节 =
+4 腿 × ABAD髋侧摆 / HIP大腿 / KENN小腿 / FOOT轮）的速度跟踪策略，产出的 ONNX 直接对接
+本仓库部署端 `src/inference/robots/wheel_quad`（ROS2 + ONNX Runtime）。
+
+```
+rl/
+├── pyproject.toml                    # pip install -e ./rl
+├── README.md                         # sim2real 契约表 / 域随机化 / 调参提示
+├── DEVELOPMENT.md                    # ← 本文件
+├── rp_wd_rl/
+│   ├── assets/
+│   │   ├── rp_wd_contract.py         # ★ 契约常量 (纯 Python, 不依赖 isaaclab)
+│   │   └── rp_wd.py                  # ArticulationCfg (USD / 驱动器 / 默认姿态)
+│   └── tasks/locomotion/velocity/
+│       ├── rp_wd_env_cfg.py          # ★ 环境配置 (观测/动作/奖励/域随机化/终止)
+│       ├── mdp/{rewards,observations,events}.py
+│       └── agents/rsl_rl_ppo_cfg.py  # PPO 超参
+└── scripts/
+    ├── train.py / train.sh           # 训练 (强制 headless + 阻止休眠)
+    ├── test_policy.py / .sh          # 测量式测试: sweep / 固定指令 / 遥控
+    ├── play.py / play.sh             # 回放 + 导出 ONNX
+    ├── teleop.sh                     # 键盘(默认 WASD+QE)/手柄遥控
+    ├── gui_test.sh                   # GUI 测试入口 (带并发保护)
+    ├── verify_contract.py / .sh      # ★ 契约复核 (静态 + 运行时)
+    ├── keyboard_wasd.py              # WASD 键位的 SE(2) 键盘设备
+    ├── onnx_utils.py                 # ONNX 单文件化 + 契约校验
+    ├── sim_shutdown.py               # Isaac Sim 关闭兜底 (挂起 → 超时强杀)
+    └── start.md                      # 常用命令速查
+```
+
+关键实现选择：
+
+- **外部工程而非改 Isaac Lab**：`rl/` 独立成包，资产直接复用 `description/RP_wd/usd/`，
+  不污染 Isaac Lab 源码，升级时不受影响。
+- **契约常量单独成模块**（`rp_wd_contract.py`）：不 import isaaclab（`isaaclab.sim` 依赖
+  `carb`，只能在 SimulationApp 启动后导入），因此校验脚本能在无仿真时做静态检查。
+- **训练脚本自写**（不复制 Isaac Lab 的 `train.py`）：避免 vendored 代码漂移，并顺手加上了
+  休眠抑制、日志重定向、关闭兜底。
+
+---
+
+## 2. sim2real 契约（核心资产）
+
+观测/动作的**每一个维度、顺序、量纲**都由部署端 `inference_node.cpp` 写死，训练侧必须逐项一致。
+
+| 项目 | 训练侧 | 部署侧 |
+|---|---|---|
+| 物理步长 / 降采样 | `sim.dt=0.0025`, `decimation=8` → **50 Hz** | `dt` / `decimation` |
+| 单帧观测 53 维 | ang_vel(3)+gravity(3)+cmd(3)+dof_pos(12,腿)+dof_vel(16)+last_action(16) | `obs_layouts` |
+| 帧栈 3 | `history_length=3`, term-major, 每分量**旧→新**（最新在最后） | `frame_stacks:[3]`, `obs_major` |
+| ONNX I/O | `obs[1,159]` → `actions[1,16]`, 权重单文件内嵌 | 同左（名字 `obs`/`actions`） |
+| 位置动作 | 腿 12 关节, scale 0.125/0.25/0.25, offset=默认姿态 | `act = raw×scale + joint_default_angle` |
+| 速度动作 | 轮 4 关节, scale 5.0, offset=0 | `act_vel = raw×5.0`（kp=0 纯阻尼） |
+| 动作裁剪 | `clip_actions=10.0`（作用于原始动作） | `clip_actions: 10.0` |
+| PD 增益 | 腿 kp=100 kd=3；轮 kp=0 kd=3 | `robot.yaml` |
+| 指令范围 | vx/vy ±2.0 m/s, ωz ±1.0 rad/s | `clip_cmd` |
+| 倾角保护 | `bad_orientation` 60° | `gravity_z_upper: -0.5` |
+
+**契约复核**：`./rl/scripts/verify_contract.sh` 会检查 34 项（静态 20 + 运行时 14），
+包括：观测分量顺序/维度、动作缩放、`usd2urdf` 映射、默认姿态、PD 增益、dt×decimation、
+以及**运行时实测**——动作映射（给 raw 动作读关节目标）、帧栈排布（连给两次不同动作看
+`last_action` 三帧顺序）、关节顺序。**改任何观测/动作/奖励/部署 YAML 后都要跑一遍。**
+
+---
+
+## 3. 关键发现与踩坑
+
+### 3.1 关节顺序：三方假设不一致，实测确认一致
+
+- USD 文件里关节的**书写顺序**是"按腿分组"（LB_ABAD, LB_HIP, LB_KENN, LB_FOOT, LF_...）
+- 部署端 YAML 假设的是"**按关节类型分组**"（ABAD×4, HIP×4, KENN×4, FOOT×4，组内 LB/LF/RB/RF）
+- 实测：Isaac Lab 的 `Articulation.joint_names` 报告的**正是类型分组**（PhysX 重新排序），
+  与部署端 `usd2urdf: [8,0,12,4,9,1,13,5,10,2,14,6,11,3,15,7]` 完全吻合 → **部署配置一字不用改**
+- 教训：USD 的书写顺序 ≠ 仿真里的 articulation 顺序，必须实测
+
+### 3.2 帧栈语义（最容易写死的一项）
+
+部署端 `update_stacked_obs`：term-major（每个分量自己的 3 帧相邻）、**旧→新（最新在最后）**、
+首帧复制当前观测。Isaac Lab 的 `history_length=3 + flatten_history_dim=True` 语义**完全一致**。
+用"连给两次不同动作，看 last_action 三帧"实测验证得到 `[0,1,0]` ✓。
+
+### 3.3 ONNX 权重外置（部署隐患）
+
+torch 2.11 的导出器默认把权重写成 `policy.onnx.data`，而部署端只拷一个 `.onnx` →
+实机加载失败。`onnx_utils.py` 自动合并成单文件并校验权重已内嵌。
+
+### 3.4 `desired_contacts` 的语义陷阱
+
+Isaac Lab 2.3.2 里 `mdp.desired_contacts` 的含义是"**所有**列出的刚体都**没**接触时返回 1"，
+当作正向奖励用等于**奖励四轮离地**。已改成自定义的 `mdp.wheels_in_contact_frac`（着地比例）。
+
+### 3.5 奖励配比失衡 → 自杀式局部最优
+
+第一版奖励中 `stand_still_wheel_vel` 写成 `Σω²` 且**无上界**：轮速 5 rad/s 时四轮合计 100，
+乘以权重后单回合扣分达跟踪奖励的 **7 倍**（实测 −3.57/s vs +0.50/s）。
+结果：策略在 iter 280 学会"**主动摔倒**"提前结束回合来少扣分 —— 回合长度从 1000 崩到 13。
+
+修法：改成四轮转速的 **L2 范数 + 截断**，权重 −0.5 → −0.05；另加 `termination_penalty=-200`
+（`mdp.is_terminated`，不含超时）堵死捷径。修复后：跟踪 : 惩罚 = **79 : 1**（此前 1 : 6.4）。
+
+### 3.6 小跑步态退化（把轮子当脚用）
+
+第二版（`rewardfix_v2`）回报 +45.9 稳定、不摔、跟踪也准，但**步态是错的**：
+实测**平均着地轮数 2.36/4**（四轮同时着地仅 4.7%）、轮速只有应有值的 1/3、滚动失配 1.16 ——
+它用腿蹬地、轮子当"脚"跑对角小步。
+
+根因：奖励里**没有任何一项要求"滚动"**，站着不动和滚起来都能拿到跟踪奖励，PPO 找到了
+更早探索到的蹬腿解。危害：冲击大（仿真最不准的部分 → sim2real 风险最高）、效率低、浪费轮子。
+
+修法（第三版 `rolling_v4`）：
+- `wheel_rolling_slip`（−10，**带截断**防悬崖）：惩罚 `ω·r` 与轮心前向速度的失配 ——
+  只有真滚动才不扣分；注意只比 x 轴分量，所以**不会误伤横移**
+- `all_wheels_contact`（+0.5）：四轮着地比例
+- 效果：着地 **94.8%**、失配 ≈0、回报 **+53.87**（比小跑解高 8 分），且 300 迭代就冲到 +49
+
+### 3.7 并发仿真把训练死锁（血的教训）
+
+同时开 3 个 Isaac Sim 实例（训练 + 2 个分析 agent）→ 训练进程僵在 `futex_wait`、
+GPU 利用率 1%、**空转 12.8 小时**只跑到 101/3000。journal 无 OOM 无驱动报错，属 GPU 上下文死锁。
+
+修法：① `gui_test.sh` 加并发守卫（检测到训练在跑就拦住，除非 `--wait`/`--force`）；
+② 任何"写脚本顺手跑个仿真"的操作都必须等训练结束；③ 训练用 `systemd-inhibit`
+阻止系统休眠（否则夜间休眠同样冻死训练 —— 实测发生过一次）。
+
+### 3.8 其它运行环境坑
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| 脚本跑完结果不打印/丢日志 | 兜底用的 `os._exit()` **不刷新 stdio 缓冲** | `sim_shutdown.py` 里先 flush + `logging.shutdown()`；脚本设行缓冲 |
+| 脚本打印完不退出 | `SimulationApp.close()` 偶发挂起 | 后台线程 + 5s 超时强杀 |
+| `pkill` 杀不掉 | Isaac Sim 吞 SIGTERM | 用 `-9`；且 `pkill -f` 的模式要写成 `[t]est_policy.py` 避免杀掉自己那条命令 |
+| 调 `pkill` 的 shell 自己退出码 144 | `pkill -f "xxx.py"` 匹配到了执行该命令的 shell 自身 | 同上 |
+
+### 3.9 提速必须重新标定奖励
+
+把指令范围从 ±0.6 提到 ±2.0 m/s 时，两个奖励项不改就会**反过来压制提速**：
+
+- 跟踪核宽度 σ：0.4 → **1.0**（经验 σ≈0.5×最大指令；仍用 0.4 则误差 >0.8 m/s 就没梯度）
+- `wheel_vel_l2`：−1e-3 → **−1e-4**（2 m/s 时 Σω²≈1520，旧权重要扣 −30/回合）
+
+---
+
+## 4. 训练历程
+
+| 版本 | 配置 | 结果 | 结论 |
+|---|---|---|---|
+| `rewardfix_v2`<br>10-10 22:08 | 平地, 4096 env, 3000 iter<br>指令 ±0.6 / ±0.4 / ±0.8 | 回报 **+45.9**（96% 理论跟踪上限）<br>但**步态是小跑**：着地 2.36/4、滑移比 0.2 | ❌ 淘汰 —— 奖励缺"必须滚动"项 |
+| `rolling_v3`<br>10-10 22:43 | 同上 + 滚动奖励 | 跑 4 分钟（iter 101）后被**并发仿真死锁** | 作废（已取证，见 3.7） |
+| `rolling_v4`<br>10-11 11:34 | 同上 + 滚动奖励<br>（修复后） | 3000 iter / 57 分钟<br>回报 **+53.87**，着地 **94.8%**，失配 ≈0 | ✅ **当前基线**（四轮滚动） |
+| `speed_v1`<br>10-11 13:00 | 指令提到 **vx/vy ±2.0 m/s, ωz ±1.0**<br>σ→1.0, wheel_vel_l2→−1e-4<br>5000 iter | 进行中：iter 100→500 跟踪误差 2.65→1.86（单调降） | 观察中 |
+
+**判读经验**（sweep 表怎么读）：
+
+- `滑移比`（轮线速 ÷ 机身速度）≈ **1.0 = 四轮纯滚动**；≈ 0.2 = 用轮子当脚蹦
+- `着地轮数` 应接近 **4/4**（>90%）
+- `终止` = 期间摔倒次数，应为 0
+- 原地转时滑移比无意义（分母≈0），别误判为打滑
+
+---
+
+## 5. 已知限制与待办
+
+1. **轮速上限 50 rad/s 是估值**（取部署端命令限幅），不是 RS02 铭牌值 —— 拿到实测转速后改
+   `rp_wd_contract.py` 的 `VELOCITY_LIMIT_SIM["FOOT"]`
+2. **横移靠轮子侧向刮擦**（轮轴固定、无侧向驱动）—— 大侧向速度物理上跟不准，属预期行为
+3. 轮力矩用 RS02 峰值 17 N·m，连续工作建议按额定 6 N·m 复核散热
+4. 部署端 `act_alpha=0.9` 的 EMA 时间常数约 1.1 ms，训练侧未建模（影响可忽略）
+5. 关节零点误差目前只加在观测上（近似），严格建模需同时偏移动作目标
+6. **粗糙地形未做**：地形生成器配方、课程函数、奖励调整已完成调研（见对话记录），
+   代码待写；用户另有一份 mesh 地形（STL/OBJ），要作为评估赛道接入
+7. **感知型策略（高程图）未做**：部署端 `extra_obs` 管道支持，但 wheel_quad 的
+   `perception` 回调已删除，需补约 30 行 C++；触发条件 = 实机盲走撞到 0.10 m 台阶 / 25° 坡天花板
+
+---
+
+## 6. 版本记录
+
+| 日期 | 版本 | 内容 |
+|---|---|---|
+| 2026-10-11 | v1 | 训练工程首次提交：Isaac Lab 外部工程 + sim2real 契约 + 契约复核脚本 + 训练/测试/遥控/导出工具链 + `rolling_v4` 基线模型（+53.87, 四轮滚动）+ 提速版配置（±2.0 m/s） |
+
+**提交约定**：以后每次有**较成功的改动**或**更新量可作为一个版本**时就 commit 一次
+（例如：新步态收敛 / 契约变更 / 新工具链 / 地形训练接入），并在上表追加一行。
+提交信息用 `type: 摘要` 格式（feat/fix/docs/refactor/train），正文写清动机与验证方式。
+
+---
+
+## 7. 快速索引
+
+| 我要… | 命令 / 文件 |
+|---|---|
+| 看所有常用命令 | [scripts/start.md](scripts/start.md) |
+| 看契约表 | [README.md](README.md) |
+| 改契约常量 | `rp_wd_rl/assets/rp_wd_contract.py` |
+| 改奖励/观测/动作 | `rp_wd_rl/tasks/locomotion/velocity/rp_wd_env_cfg.py` |
+| 改地形/步态相关奖励 | `.../mdp/rewards.py` |
+| 验证没改坏契约 | `./rl/scripts/verify_contract.sh` |
+| 量化验收步态 | `./rl/scripts/test_policy.sh --sweep --headless` |
+| 手动驾驶看行为 | `./rl/scripts/teleop.sh`（WASD+QE） |

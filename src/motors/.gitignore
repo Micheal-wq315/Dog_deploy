@@ -1,0 +1,19 @@
+#environment
+.vscode
+
+# Deb build artifacts
+*.deb
+roboto-motors_*/
+bin
+build
+lib
+/install
+temp
+cmake-build-debug
+.idea
+log
+test/
+src/protocol/ethercanfd
+src/protocol/ethercat
+src/protocol/group_ethercat
+src/drivers/xyn

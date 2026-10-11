@@ -1,0 +1,21 @@
+#environment
+.vscode/
+.idea/
+
+# ros2
+build/
+install/
+log/
+
+# debhelper build outputs
+obj-*/
+debian/files
+debian/debhelper-build-stamp
+debian/*.debhelper.log
+debian/*.substvars
+debian/roboparty-*/
+debian/.debhelper/
+
+# source ignore
+thirdparty/yaml-cpp-0.9.0
+thirdparty/onnxruntime*/

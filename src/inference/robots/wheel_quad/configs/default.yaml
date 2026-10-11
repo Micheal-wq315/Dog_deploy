@@ -1,0 +1,85 @@
+# ============================================================================
+# wheel_quad default.yaml — 四轮足机器人默认推理策略配置
+# ============================================================================
+# 观测空间 (单帧 53 维):
+#   ang_vel(3) + gravity_b(3) + cmd_vel(3) + dof_pos(12) + dof_vel(16) + last_action(16)
+# 帧栈: 3 帧 (obs_major, 每个观测分量 3 帧历史各自相邻) → 输入 159 维
+#
+# TODO: 按实际训练模型调整:
+#   - model_names: ONNX 模型文件名
+# ============================================================================
+
+inference_node:
+    ros__parameters:
+        model_names: ["policy_flat.onnx"]
+        obs_layouts:
+          - "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:12, dof_vel:16, last_action:16"
+        frame_stacks: [3]
+        obs_stack_orders: ["obs_major"]
+        act_alpha: 0.9
+        joint_num: 16
+        decimation: 8
+        intra_threads: 1
+        dt: 0.0025
+        obs_scales_lin_vel: 1.0
+        obs_scales_ang_vel: 1.0
+        obs_scales_dof_pos: 1.0
+        obs_scales_dof_vel: 1.0
+        obs_scales_gravity_b: 1.0
+        clip_observations: 100.0
+        # 每关节动作缩放 (USD 顺序: [ABAD×4, HIP×4, KENN×4, FOOT×4])
+        action_scales:
+            [0.125, 0.125, 0.125, 0.125,   # ABAD 髋侧摆 (位置控制)
+             0.25, 0.25, 0.25, 0.25,       # HIP 大腿 (位置控制)
+             0.25, 0.25, 0.25, 0.25,       # KENN 小腿 (位置控制)
+             5.0, 5.0, 5.0, 5.0]           # FOOT 轮子 (速度控制)
+        # 速度控制关节的 USD 索引 (轮子 → 走速度控制, 不叠加默认角度)
+        wheel_joint_indices: [12, 13, 14, 15]
+        clip_actions: 10.0
+
+        # USD → URDF 关节顺序映射
+        # USD (Isaac Sim, 按类型分组): [ABAD×4, HIP×4, KENN×4, FOOT×4], 每组内 LB/LF/RB/RF
+        # URDF (部署, 按腿分组):         [LF, RF, LB, RB] × [ABAD, HIP, KENN, FOOT]
+        usd2urdf: [8, 0, 12, 4, 9, 1, 13, 5, 10, 2, 14, 6, 11, 3, 15, 7]
+
+        # 速度指令限幅 [vx_min, vx_max, vy_min, vy_max, ωz_min, ωz_max]
+        clip_cmd:
+            [-2.0, 2.0,
+             -2.0, 2.0,
+             -1.0, 1.0]
+
+        # 关节默认角度 (站立姿态, 16 个关节, URDF 顺序)
+        # 顺序: LF, RF, LB, RB (对应 can0/can1/can2/can3)
+        # 每腿: [ABAD, HIP, KENN, FOOT]
+        # 来源: 训练资产 default_joint_pos = {ABAD:0.0, HIP:0.72, KENN:-1.41}
+        #       FOOT(轮子) 未指定 → 默认 0.0 (速度控制, 该值无意义)
+        joint_default_angle:
+            [0.0, 0.72, -1.41, 0.0,   # LF: ABAD, HIP, KENN, FOOT
+             0.0, 0.72, -1.41, 0.0,   # RF: ABAD, HIP, KENN, FOOT
+             0.0, 0.72, -1.41, 0.0,   # LB: ABAD, HIP, KENN, FOOT
+             0.0, 0.72, -1.41, 0.0]   # RB: ABAD, HIP, KENN, FOOT
+
+        # 关节软限位 [lower, upper, lower, upper, ...]
+        # 顺序: URDF 顺序 (LF, RF, LB, RB × ABAD/HIP/KENN/FOOT)
+        # 来源: RP_wd.urdf 各 revolute 关节的 <limit>
+        #   ABAD(髋侧摆): -1 ~ 1        HIP(大腿): -1.57 ~ 3.49
+        #   KENN(小腿):   -2.7 ~ -0.83   FOOT(轮): continuous (无硬限位)
+        joint_limits:
+            [-1.0, 1.0,     # LF ABAD 髋侧摆
+             -1.57, 3.49,   # LF HIP 大腿
+             -2.7, -0.83,   # LF KENN 小腿
+             -1e9, 1e9,     # LF FOOT 轮 (continuous)
+             -1.0, 1.0,     # RF ABAD 髋侧摆
+             -1.57, 3.49,   # RF HIP 大腿
+             -2.7, -0.83,   # RF KENN 小腿
+             -1e9, 1e9,     # RF FOOT 轮 (continuous)
+             -1.0, 1.0,     # LB ABAD 髋侧摆
+             -1.57, 3.49,   # LB HIP 大腿
+             -2.7, -0.83,   # LB KENN 小腿
+             -1e9, 1e9,     # LB FOOT 轮 (continuous)
+             -1.0, 1.0,     # RB ABAD 髋侧摆
+             -1.57, 3.49,   # RB HIP 大腿
+             -2.7, -0.83,   # RB KENN 小腿
+             -1e9, 1e9]     # RB FOOT 轮 (continuous)
+
+        gravity_z_upper: -0.5
