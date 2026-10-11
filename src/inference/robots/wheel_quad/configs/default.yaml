@@ -44,8 +44,8 @@ inference_node:
 
         # 速度指令限幅 [vx_min, vx_max, vy_min, vy_max, ωz_min, ωz_max]
         clip_cmd:
-            [-2.0, 2.0,
-             -2.0, 2.0,
+            [-1.0, 1.0,
+             -0.6, 0.6,
              -1.0, 1.0]
 
         # 关节默认角度 (站立姿态, 16 个关节, URDF 顺序)

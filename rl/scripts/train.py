@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 from isaaclab.app import AppLauncher
@@ -87,6 +88,23 @@ torch.backends.cudnn.benchmark = False
 RSL_RL_VERSION = metadata.version("rsl-rl-lib")
 
 
+
+def resolve_resume_path(log_root_path: str, load_run: str, checkpoint: str) -> str:
+    """定位要加载的 checkpoint.
+
+    支持两种写法:
+      - `--load_run` 是**实验目录内的 run 名** (正则): 走 Isaac Lab 的 get_checkpoint_path
+      - `--load_run` 是**绝对路径**: 直接在该目录里匹配 checkpoint
+        (用于跨实验热启动, 例如从平地的 run 热启动到崎岖地形任务)
+    """
+    if os.path.isabs(load_run):
+        cands = sorted(f for f in os.listdir(load_run) if re.match(checkpoint, f))
+        if not cands:
+            raise FileNotFoundError(f"{load_run} 中没有匹配 {checkpoint} 的 checkpoint")
+        return os.path.join(load_run, cands[-1])
+    return get_checkpoint_path(log_root_path, load_run, checkpoint)
+
+
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     """训练主流程."""
@@ -134,7 +152,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     # 续训: 必须在创建新 log_dir 之前定位 checkpoint
     if agent_cfg.resume:
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        # 实验目录可能还不存在 (新实验名 + 热启动), get_checkpoint_path 会 listdir 它
+        os.makedirs(log_root_path, exist_ok=True)
+        resume_path = resolve_resume_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
     if args_cli.video:
         video_kwargs = {

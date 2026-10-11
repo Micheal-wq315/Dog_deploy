@@ -51,3 +51,10 @@ class RPWDFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class RPWDRoughPPORunnerCfg(RPWDFlatPPORunnerCfg):
+    """崎岖地形任务的 PPO 配置 (超参沿用平地版, 只换日志目录名)."""
+
+    experiment_name = "rp_wd_rough"

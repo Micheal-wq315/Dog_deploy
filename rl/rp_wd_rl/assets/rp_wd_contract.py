@@ -91,11 +91,11 @@ FRAME_STACK = 3  # 观测帧栈长度 (部署端 frame_stacks)
 POLICY_FREQ = 1.0 / POLICY_DT
 
 # 速度指令范围 —— 部署端 clip_cmd: [vx_min,vx_max, vy_min,vy_max, wz_min,wz_max]
-# 2026-10-11 提速: vx/vy ±0.4~0.6 -> ±2.0 m/s, wz ±0.8 -> ±1.0 rad/s.
+# 2026-10-11 定版: vx ±1.0, vy ±0.6 (横移靠侧向刮擦, 物理上限低), wz ±1.0.
 # 注意: 这是**契约变更**, 必须同步改 src/inference/robots/wheel_quad/configs/default.yaml
 # 的 clip_cmd (verify_contract.py 会逐项核对), 否则实机会按旧限幅截断指令.
-CMD_VX_RANGE = (-2.0, 2.0)
-CMD_VY_RANGE = (-2.0, 2.0)
+CMD_VX_RANGE = (-1.0, 1.0)
+CMD_VY_RANGE = (-0.6, 0.6)
 CMD_WZ_RANGE = (-1.0, 1.0)
 
 # 部署端 clip_actions: 对模型**原始输出**裁剪 ±10 (在缩放与偏置之前)
