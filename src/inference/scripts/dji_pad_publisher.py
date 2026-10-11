@@ -26,11 +26,22 @@ inference_node.hpp 中 `/joy` 订阅者的 QoS 一致, 否则收不到消息。
 轴映射 (本机实测得出, 见下方"标定"一节)
 --------------------------------------------------------------------------
   物理控件          原始轴        归一化后用途
-  左摇杆 横向       ABS_RX  (3)   wz  (转向角速度)
-  左摇杆 纵向       ABS_Z   (2)   left_y / 油门 —— 注意: 该轴不回中!
+  左摇杆 横向       ABS_Z   (2)   wz  (转向角速度) —— ★ 该轴不回中, 见下方警告
+  左摇杆 纵向       ABS_RX  (3)   left_y / 油门
   右摇杆 横向       ABS_X   (0)   vy  (左右平移)
   右摇杆 纵向       ABS_Y   (1)   vx  (前进/后退)
   拨轮              ABS_RY  (4)   dial (备用)
+
+  ★★ 转向轴不回中的警告 ★★
+  ABS_Z 是这台手柄上唯一「松手不回中」的轴(实测静止位置漂移过
+  -660 区间内的 -279 / -299 / -302 / -306 / -46 等多个值)。
+  它现在被分配给 wz(转向), 意味着: 松开左摇杆后转向指令会停在
+  最后一次的值上, 机器人持续自转, 不会自动回零。
+
+  如果这不是期望行为, 两条路:
+    a) 把横向/纵向换回去 —— 本文件 RAW_LEFT_X / RAW_LEFT_Y 两个常量对调;
+    b) 保留当前轴分配, 但把 wz 的来源换成不自回中的那一个 —— 见
+       下方 "控制量" 一节的注释。
 
   8 个按键: HID usage 1..8 → evdev 0x130..0x137
   (描述符里声明了 24 个按键, 实测只有 8 个存在, 其余 16 个恒为 0)
@@ -108,8 +119,8 @@ EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
 EV_SYN, EV_KEY, EV_ABS = 0x00, 0x01, 0x03
 
 # 实测出的物理轴分配: 原始 evdev code -> 角色
-RAW_LEFT_X = 3   # ABS_RX  左摇杆横向
-RAW_LEFT_Y = 2   # ABS_Z   左摇杆纵向 (不回中)
+RAW_LEFT_X = 2   # ABS_Z   左摇杆横向
+RAW_LEFT_Y = 3   # ABS_RX  左摇杆纵向
 RAW_RIGHT_X = 0  # ABS_X   右摇杆横向
 RAW_RIGHT_Y = 1  # ABS_Y   右摇杆纵向
 RAW_DIAL = 4     # ABS_RY  拨轮
@@ -412,6 +423,14 @@ class DjiPadPublisher(Node):
             "控制量限幅: vx±%.2f m/s  vy±%.2f m/s  wz±%.2f rad/s"
             % (self.max_vx, self.max_vy, self.max_wz)
         )
+        self.get_logger().info(
+            "轴分配: 左横 ABS_Z(2)→wz | 左纵 ABS_RX(3)→油门(0..1) | "
+            "右横 ABS_X(0)→vy | 右纵 ABS_Y(1)→vx | 拨轮 ABS_RY(4)"
+        )
+        self.get_logger().warn(
+            "左横轴 ABS_Z 在这台手柄上松手不回中, 因此 wz(转向) 在松开摇杆后"
+            "不会自动归零。如需转向自回零, 见脚本内「控制量」一节注释。"
+        )
         if self.pub_joy:
             self.get_logger().info("发布 /joy (Xbox 兼容布局, 8 轴 8 键)")
         if self.pub_cmd:
@@ -450,15 +469,20 @@ class DjiPadPublisher(Node):
         right_y_raw = norm(self.c_right_y)
         dial_raw = norm(RAW_DIAL)
 
-        # 摇杆: 死区 + 曲线
+        # 摇杆(自回中轴): 死区 + 曲线
         left_x = apply_expo(apply_deadzone(left_x_raw, self.deadzone), self.expo)
         right_x = apply_expo(apply_deadzone(right_x_raw, self.deadzone), self.expo)
         right_y = apply_expo(apply_deadzone(right_y_raw, self.deadzone), self.expo)
 
-        # 油门: 左杆纵向是不回中的, 直接线性映射到 0..1, 不加死区
+        # 左杆纵向: 线性映射到 0..1, 不加死区
         throttle = min(1.0, max(0.0, (left_y_raw + 1.0) * 0.5))
 
         # ── 控制量 ───────────────────────────────────────────────────
+        # ★★ 当前轴分配下 left_x = ABS_Z, 而 ABS_Z 是本手柄唯一不回中的轴,
+        #    因此松开左摇杆后 wz 会停在最后一次的值上, 不会自动归零。
+        #    若要让转向取自自回中的轴, 把下一行换成:
+        #        vx, vy, wz = right_y, right_x, left_y
+        #    代价是 left_y 同时失去"油门"语义, 需自行调整。
         vx, vy, wz = right_y, right_x, left_x
         if self.throttle_scales:
             vx *= throttle
