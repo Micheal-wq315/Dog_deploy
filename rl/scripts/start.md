@@ -46,9 +46,14 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 ./rl/scripts/verify_contract.sh                          # 静态 + 运行时, ~25 秒
 ./rl/scripts/verify_contract.sh --no-sim                 # 只跑静态检查, 秒级
 
-# 指令扫描: 9 组典型指令, 输出跟踪误差 / 姿态 / 滑移比汇总表 (最常用的量化验收)
+# 指令扫描: 10 组典型指令, 输出跟踪误差 / 姿态 / 滑移比汇总表 (最常用的量化验收)
 ./rl/scripts/test_policy.sh --sweep --headless
 ./rl/scripts/test_policy.sh --sweep                      # 开窗口, 边看边出表
+
+# ★ 崎岖地形 (随机地形: 台阶/方格/粗糙/坡度 共 6 类, 全难度随机出现)
+./rl/scripts/test_policy.sh --rough --sweep --headless   # 地形上量跟踪误差
+./rl/scripts/test_policy.sh --rough --cmd 0.5 0 0        # 地形上跑固定指令
+./rl/scripts/test_policy.sh --rough --train-dist --sweep # 训练分布(含域随机化)下的地形鲁棒性
 
 # 固定指令: 一组指令跑到底
 ./rl/scripts/test_policy.sh --cmd 0.5 0 0 --headless     # 前进 0.5 m/s
@@ -76,7 +81,8 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 ./rl/scripts/gui_test.sh --dry-run --force                # 只看要执行什么, 不启动
 
 # 键盘遥控 (手动驾驶)
-./rl/scripts/teleop.sh                                   # 4 台机器人, 真实 50Hz
+./rl/scripts/teleop.sh                                   # 平地: 4 台机器人, 真实 50Hz
+./rl/scripts/teleop.sh --rough                           # ★ 崎岖地形上手动驾驶
 ./rl/scripts/teleop.sh --num_envs 8 --teleop-scale 0.5    # 多放几台 + 速度减半
 ./rl/scripts/teleop.sh --teleop gamepad                  # 插了手柄再切手柄
 ```

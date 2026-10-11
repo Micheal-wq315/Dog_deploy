@@ -37,6 +37,7 @@ parser.add_argument("--num_envs", type=int, default=16, help="并行环境数 (G
 parser.add_argument("--max_steps", type=int, default=0, help="总步数上限 (0 = 一直跑, 关窗/Ctrl+C 退出).")
 parser.add_argument("--log_interval", type=int, default=25, help="每隔多少步打印一行指标 (25 步 = 0.5 s).")
 parser.add_argument("--train-dist", action="store_true", default=False, help="用训练配置 (含域随机化+观测噪声) 测鲁棒性.")
+parser.add_argument("--rough", action="store_true", default=False, help="在崎岖地形上测试/遥控 (随机地形).")
 parser.add_argument("--export", action="store_true", default=False, help="同时导出 ONNX 到 rl/exported/.")
 parser.add_argument(
     "--teleop", type=str, default=None, choices=["gamepad", "keyboard"],
@@ -288,7 +289,8 @@ def main() -> None:
     if args_cli.sweep and args_cli.teleop is not None:
         print("[WARN] --teleop 与 --sweep 不能同时使用, 忽略 --sweep (进入遥控模式).")
         args_cli.sweep = False
-    task = "Isaac-Velocity-Flat-RPWD-v0" if args_cli.train_dist else "Isaac-Velocity-Flat-RPWD-Play-v0"
+    surface = "Rough" if args_cli.rough else "Flat"
+    task = f"Isaac-Velocity-{surface}-RPWD-v0" if args_cli.train_dist else f"Isaac-Velocity-{surface}-RPWD-Play-v0"
     env_cfg = load_cfg_from_registry(task, "env_cfg_entry_point")
     agent_cfg = load_cfg_from_registry(task, "rsl_rl_cfg_entry_point")
 

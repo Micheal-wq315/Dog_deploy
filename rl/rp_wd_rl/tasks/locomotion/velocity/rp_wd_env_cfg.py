@@ -430,6 +430,9 @@ class CurriculumCfg:
         },
     )
 
+    # 崎岖地形版才启用 (见 rp_wd_rough_env_cfg.py); 这里预声明字段以便子类赋值
+    terrain_levels: CurrTerm | None = None
+
 
 ##
 # 终止条件

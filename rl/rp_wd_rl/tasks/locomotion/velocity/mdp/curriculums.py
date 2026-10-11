@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+import torch
+
+from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.terrains import TerrainImporter
 
 from rp_wd_rl.assets.rp_wd_contract import CMD_VX_RANGE, CMD_VY_RANGE, CMD_WZ_RANGE
 
@@ -59,3 +66,37 @@ def command_lin_vel_curriculum(
     else:
         ranges.ang_vel_z = CMD_WZ_RANGE
     return scale
+
+
+def terrain_levels_vel(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """按机器人走出的距离升降**地形难度等级** (崎岖地形课程).
+
+    走够半个地块宽度就升级, 走得不到指令距离的一半就降级.
+
+    源码取自 Isaac Lab 2.3.2 的 velocity 任务
+    (`isaaclab_tasks/manager_based/locomotion/velocity/mdp/curriculums.py:27-56`),
+    复制到本仓库以便独立演进.
+
+    .. note::
+        只对 ``terrain_type="generator"`` 且 ``use_terrain_origins=True`` 有效
+        (否则 ``terrain_levels`` 属性不存在, 会直接 AttributeError).
+
+    Returns:
+        当前平均地形等级 (会记到 ``Curriculum/terrain_levels`` 曲线上).
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    terrain: TerrainImporter = env.scene.terrain
+    command = env.command_manager.get_command("base_velocity")
+    # 走出多远
+    distance = torch.norm(asset.data.root_pos_w[env_ids, :2] - env.scene.env_origins[env_ids, :2], dim=1)
+    # 走够半个地块 -> 升级
+    move_up = distance > terrain.cfg.terrain_generator.size[0] / 2
+    # 走不到指令距离的一半 -> 降级
+    move_down = distance < torch.norm(command[env_ids, :2], dim=1) * env.max_episode_length_s * 0.5
+    move_down *= ~move_up
+    terrain.update_env_origins(env_ids, move_up, move_down)
+    return torch.mean(terrain.terrain_levels.float())
