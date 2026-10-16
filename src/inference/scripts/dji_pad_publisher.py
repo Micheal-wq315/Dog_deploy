@@ -26,22 +26,19 @@ inference_node.hpp 中 `/joy` 订阅者的 QoS 一致, 否则收不到消息。
 轴映射 (本机实测得出, 见下方"标定"一节)
 --------------------------------------------------------------------------
   物理控件          原始轴        归一化后用途
-  左摇杆 横向       ABS_Z   (2)   wz  (转向角速度) —— ★ 该轴不回中, 见下方警告
-  左摇杆 纵向       ABS_RX  (3)   left_y / 油门
-  右摇杆 横向       ABS_X   (0)   vy  (左右平移)
-  右摇杆 纵向       ABS_Y   (1)   vx  (前进/后退)
-  拨轮              ABS_RY  (4)   dial (备用)
+  右摇杆 纵向       ABS_Y   (1)   vx   (前进/后退)
+  右摇杆 横向       ABS_X   (0)   vy   (左右平移)
+  左摇杆 纵向       ABS_RX  (3)   wz   (转向角速度) ← 默认, 自回中
+  左摇杆 横向       ABS_Z   (2)   空闲 (该轴不回中, 见下方警告)
+  拨轮              ABS_RY  (4)   油门 (0..1, 可锁定; 仅当 throttle_scales_speed=true 时生效)
 
-  ★★ 转向轴不回中的警告 ★★
-  ABS_Z 是这台手柄上唯一「松手不回中」的轴(实测静止位置漂移过
-  -660 区间内的 -279 / -299 / -302 / -306 / -46 等多个值)。
-  它现在被分配给 wz(转向), 意味着: 松开左摇杆后转向指令会停在
-  最后一次的值上, 机器人持续自转, 不会自动回零。
-
-  如果这不是期望行为, 两条路:
-    a) 把横向/纵向换回去 —— 本文件 RAW_LEFT_X / RAW_LEFT_Y 两个常量对调;
-    b) 保留当前轴分配, 但把 wz 的来源换成不自回中的那一个 —— 见
-       下方 "控制量" 一节的注释。
+  ★★ 为什么转向不用左摇杆「横向」(ABS_Z) ★★
+  实测 (2026-10-12, 手柄平放不触碰): ABS_Z 静止读数 -0.36 —— 而其它三个摇杆轴
+  静止都在 ±0.00。历史测量还见过 -279 / -299 / -302 / -306 / -46 (原始值) 的漂移,
+  即归一化后 -0.42 ~ -0.07。若用它做转向, **没人碰手柄时机器人也会持续自转**;
+  死区(默认 0.10)挡不住这么大的偏移, 而放大死区又会吃掉近半可用行程。
+  故默认把转向放到**自回中的左摇杆纵向**(`wz_axis` 参数可改回 left_x)。
+  ABS_Z 空闲不用; 如需起用, 打开 `calibrate_wz:=true` 中标定。
 
   8 个按键: HID usage 1..8 → evdev 0x130..0x137
   (描述符里声明了 24 个按键, 实测只有 8 个存在, 其余 16 个恒为 0)
@@ -339,11 +336,25 @@ class DjiPadPublisher(Node):
         self.declare_parameter("swap_sticks", False)    # 左右摇杆对调
 
         # 方向标定 (见文件头「标定」)
-        self.declare_parameter("invert_left_x", False)   # ABS_RX
-        self.declare_parameter("invert_left_y", False)   # ABS_Z  (油门)
-        self.declare_parameter("invert_right_x", False)  # ABS_X
-        self.declare_parameter("invert_right_y", False)  # ABS_Y
-        self.declare_parameter("invert_dial", False)     # ABS_RY
+        self.declare_parameter("invert_left_x", False)   # ABS_Z  (空闲)
+        self.declare_parameter("invert_left_y", False)   # ABS_RX (转向 wz)
+        self.declare_parameter("invert_right_x", False)  # ABS_X  (平移 vy)
+        self.declare_parameter("invert_right_y", False)  # ABS_Y  (前进 vx)
+        self.declare_parameter("invert_dial", False)     # ABS_RY (油门)
+
+        # ── 转向来源与中点标定 ────────────────────────────────────────
+        # wz 取自哪个摇杆轴。默认 left_y (ABS_RX, 自回中);
+        # 可改 left_x / right_x / right_y / dial —— 但只有自回中的轴适合做转向,
+        # 见文件头「为什么转向不用左摇杆横向」。
+        self.declare_parameter("wz_axis", "left_y")
+        # 启动时对该轴做中点标定 (采样取中位数当零点)。对不回中/有偏置的轴是必需的;
+        # 对自回中轴也能修掉小的机械偏置。
+        self.declare_parameter("calibrate_wz", True)
+        self.declare_parameter("calibrate_seconds", 1.0)
+        # 标定出的零点偏移超过此值就判为"标定时有人在推杆", 不采纳并告警
+        self.declare_parameter("calibrate_max_offset", 0.15)
+        # 油门取自哪个轴 (拨轮 ABS_RY 天然"可锁定", 适合当油门)
+        self.declare_parameter("throttle_axis", "dial")
 
         # 控制量限幅, 默认对齐 wheel_quad/configs/default.yaml 的 clip_cmd
         self.declare_parameter("max_vx", 1.0)
@@ -381,6 +392,19 @@ class DjiPadPublisher(Node):
         self.yaw_compat = bool(gp("yaw_trigger_compat").value)
         self.status_period = float(gp("status_log_period").value)
 
+        # 转向来源 + 中点标定
+        self.wz_axis = str(gp("wz_axis").value)
+        if self.wz_axis not in ("left_x", "left_y", "right_x", "right_y", "dial"):
+            self.get_logger().warn("wz_axis=%r 非法, 回退到 left_y" % self.wz_axis)
+            self.wz_axis = "left_y"
+        self.calibrate_wz = bool(gp("calibrate_wz").value)
+        self.calibrate_seconds = max(0.0, float(gp("calibrate_seconds").value))
+        self.calibrate_max_offset = abs(float(gp("calibrate_max_offset").value))
+        self.throttle_axis = str(gp("throttle_axis").value)
+        self._wz_offset = 0.0          # 标定出的零点偏移
+        self._calib_samples = []       # 标定采样
+        self._calib_done = not self.calibrate_wz
+
         # 左右摇杆分组: swap 后 (X,Y) 变左杆, (Z,RX) 变右杆
         if self.swap:
             self.c_left_x, self.c_left_y = RAW_RIGHT_X, RAW_RIGHT_Y
@@ -415,22 +439,23 @@ class DjiPadPublisher(Node):
         self.timer = self.create_timer(1.0 / self.rate, self._tick)
 
         self.get_logger().info(
-            "DJI 手柄发布者已启动 | 映射: 左杆(横→wz, 纵→油门) 右杆(横→vy, 纵→vx) | "
-            "%gHz deadzone=%.2f expo=%.2f swap=%s"
-            % (self.rate, self.deadzone, self.expo, self.swap)
+            f"DJI 手柄发布者已启动 | 映射: 右杆(横→vy, 纵→vx) 转向→{self.wz_axis} "
+            f"油门→{self.throttle_axis} | {self.rate:g}Hz deadzone={self.deadzone:.2f} "
+            f"expo={self.expo:.2f} swap={self.swap} 中点标定={'开' if self.calibrate_wz else '关'}"
         )
         self.get_logger().info(
             "控制量限幅: vx±%.2f m/s  vy±%.2f m/s  wz±%.2f rad/s"
             % (self.max_vx, self.max_vy, self.max_wz)
         )
         self.get_logger().info(
-            "轴分配: 左横 ABS_Z(2)→wz | 左纵 ABS_RX(3)→油门(0..1) | "
-            "右横 ABS_X(0)→vy | 右纵 ABS_Y(1)→vx | 拨轮 ABS_RY(4)"
+            f"轴分配: 右杆 ABS_Y(1)→vx / ABS_X(0)→vy | 转向→{self.wz_axis} | "
+            f"油门→{self.throttle_axis} | 左横 ABS_Z(2) 空闲 | 拨轮 ABS_RY(4)"
         )
-        self.get_logger().warn(
-            "左横轴 ABS_Z 在这台手柄上松手不回中, 因此 wz(转向) 在松开摇杆后"
-            "不会自动归零。如需转向自回零, 见脚本内「控制量」一节注释。"
-        )
+        if self.wz_axis == "left_x":
+            self.get_logger().warn(
+                "wz_axis=left_x: ABS_Z 在这台手柄上松手不回中 (实测静止 -0.36), "
+                "转向不会自动归零 —— 只建议在 calibrate_wz:=true 且偏移稳定时使用。"
+            )
         if self.pub_joy:
             self.get_logger().info("发布 /joy (Xbox 兼容布局, 8 轴 8 键)")
         if self.pub_cmd:
@@ -474,16 +499,48 @@ class DjiPadPublisher(Node):
         right_x = apply_expo(apply_deadzone(right_x_raw, self.deadzone), self.expo)
         right_y = apply_expo(apply_deadzone(right_y_raw, self.deadzone), self.expo)
 
-        # 左杆纵向: 线性映射到 0..1, 不加死区
-        throttle = min(1.0, max(0.0, (left_y_raw + 1.0) * 0.5))
+        # ── 转向来源 + 启动中点标定 ───────────────────────────────────
+        # 为什么要标定: 实测本手柄某轴静止时有偏置 (ABS_Z 静止 -0.36), 不补偿的话
+        # "松手"就等于持续给转向指令。见文件头「为什么转向不用左摇杆横向」。
+        wz_raw = {
+            "left_x": left_x_raw,
+            "left_y": left_y_raw,
+            "right_x": right_x_raw,
+            "right_y": right_y_raw,
+            "dial": dial_raw,
+        }[self.wz_axis]
+        if not self._calib_done:
+            self._calib_samples.append(wz_raw)
+            if len(self._calib_samples) >= max(1, int(self.calibrate_seconds * self.rate)):
+                # 取中位数 (对偶发跳变比均值稳)
+                center = sorted(self._calib_samples)[len(self._calib_samples) // 2]
+                if abs(center) <= self.calibrate_max_offset:
+                    self._wz_offset = center
+                    self.get_logger().info(
+                        "转向轴 %s 中点标定: 偏移 %+.3f 已补偿 (标定 %d 帧)"
+                        % (self.wz_axis, center, len(self._calib_samples)))
+                else:
+                    self.get_logger().warn(
+                        "转向轴 %s 标定偏移 %+.3f 超过 %.2f —— 标定时是否在推杆? "
+                        "本次不补偿; 松开摇杆重跑本节点即可"
+                        % (self.wz_axis, center, self.calibrate_max_offset))
+                self._calib_done = True
+        # 先扣标定中点, 再过死区/曲线 —— 保证"松手 = 零指令"
+        wz = apply_expo(apply_deadzone(wz_raw - self._wz_offset, self.deadzone), self.expo)
+
+        # ── 油门 (默认拨轮: 天然可锁定, 适合当油门) ────────────────────
+        throttle_raw = {
+            "dial": dial_raw,
+            "left_x": left_x_raw,
+            "left_y": left_y_raw,
+            "right_x": right_x_raw,
+            "right_y": right_y_raw,
+        }.get(self.throttle_axis, dial_raw)
+        throttle = min(1.0, max(0.0, (throttle_raw + 1.0) * 0.5))
 
         # ── 控制量 ───────────────────────────────────────────────────
-        # ★★ 当前轴分配下 left_x = ABS_Z, 而 ABS_Z 是本手柄唯一不回中的轴,
-        #    因此松开左摇杆后 wz 会停在最后一次的值上, 不会自动归零。
-        #    若要让转向取自自回中的轴, 把下一行换成:
-        #        vx, vy, wz = right_y, right_x, left_y
-        #    代价是 left_y 同时失去"油门"语义, 需自行调整。
-        vx, vy, wz = right_y, right_x, left_x
+        # 右摇杆 -> 平移; 转向 -> wz (默认左摇杆纵向, 自回中)。
+        vx, vy = right_y, right_x
         if self.throttle_scales:
             vx *= throttle
             vy *= throttle

@@ -129,7 +129,28 @@ ros2 launch damiao_imu damiao_imu.launch.py device:=/dev/ttyACM0
 ros2 topic echo /imu/data
 ```
 
-### 手柄操作
+### 手柄操作 (DJI 手柄)
+
+一条命令同时启动手柄发布者与推理节点：
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch roboparty_inference dji_pad.launch.py                      # wheel_quad + 默认策略
+ros2 launch roboparty_inference dji_pad.launch.py policy:=policy_flat  # 指定策略
+ros2 launch roboparty_inference dji_pad.launch.py start_inference:=false  # 只发 /joy 调试手柄
+```
+
+**摇杆**（右摇杆平移、左摇杆纵向转向 —— 轴分配原因见下）：
+
+| 控件 | 功能 |
+|------|------|
+| **右摇杆 上下** (axes[4]) | 前进 / 后退 |
+| **右摇杆 左右** (axes[3]) | 左右平移 |
+| **左摇杆 上下** | 左转 / 右转 |
+| 左摇杆 左右 | 空闲（该轴松手不回中，见下方说明） |
+
+**按键**：
 
 | 按钮 | 功能 |
 |------|------|
@@ -137,9 +158,29 @@ ros2 topic echo /imu/data
 | **B** (buttons[2]) | 电机初始化/反初始化 |
 | **A** (buttons[0]) | 复位关节到默认姿态 |
 | **Y** (buttons[3]) | 切换手柄控制 ↔ /cmd_vel 话题控制 |
-| **左摇杆上下** (axes[4]) | 前进/后退 |
-| **左摇杆左右** (axes[3]) | 左右平移 |
-| **LT/RT** (axes[2]/axes[5]) | 左转/右转 |
+
+**安全说明（重要）**：DJI 手柄的左摇杆**横轴**松手不回中，实测静止读数为 −0.36
+（其它三个摇杆轴静止都是 0.00）。若用它做转向，**没人碰手柄机器人也会持续自转**。
+因此默认把转向放在自回中的**左摇杆纵向**上，横轴留空。
+如需换回横轴：`ros2 launch ... wz_axis:=left_x calibrate_wz:=true`（先用启动中点标定补偿偏置，
+但该轴漂移较大，不建议）。
+
+手柄发布者也可单独运行（看实时轴值、调死区/反向）：
+
+```bash
+/usr/bin/python3 src/inference/scripts/dji_pad_publisher.py          # 必须用系统 python (rclpy 3.10)
+ros2 topic echo /joy                                                 # 看输出
+# 方向反了举例: --ros-args -p invert_right_y:=true
+```
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `wz_axis` | `left_y` | 转向来源轴: left_y / left_x / right_x / right_y / dial |
+| `deadzone` | 0.10 | 摇杆死区 |
+| `calibrate_wz` | true | 启动时对转向轴做中点标定（补偿机械偏置） |
+| `swap_sticks` | false | 左右摇杆对调 |
+| `invert_*` | false | 各轴方向反转 |
+| `max_vx/max_vy/max_wz` | 1.0 / 0.6 / 1.0 | 控制量限幅（对齐 `wheel_quad/configs/default.yaml` 的 `clip_cmd`） |
 
 ### ROS2 Service 接口
 

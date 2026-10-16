@@ -1,4 +1,10 @@
-cmake_policy(SET CMP0135 NEW)
+# CMP0135 (FetchContent 解压时间戳策略) 需要 CMake >= 3.24。
+# Ubuntu 22.04 自带的 cmake 是 3.22, 直接 SET 会报
+#   "Policy CMP0135 is not known to this version of CMake"
+# 并导致整个包构建失败; 用 if(POLICY ...) 守卫, 老版本跳过即可 (沿用默认行为, 不影响功能)。
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
 
 include(FetchContent)
 
