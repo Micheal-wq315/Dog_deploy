@@ -49,6 +49,7 @@ void InferenceNode::load_config() {
     this->declare_parameter<float>("clip_actions", 10.0);
     this->declare_parameter<std::vector<long int>>("usd2urdf", std::vector<long int>{});
     this->declare_parameter<std::vector<double>>("clip_cmd", std::vector<double>{});
+    this->declare_parameter<std::vector<double>>("clip_posture", std::vector<double>{});
     this->declare_parameter<std::vector<double>>("joint_default_angle", std::vector<double>{});
     this->declare_parameter<std::vector<double>>("joint_limits", std::vector<double>{});
     this->declare_parameter<float>("gravity_z_upper", -0.5);
@@ -92,6 +93,11 @@ void InferenceNode::load_config() {
     this->get_parameter("clip_actions", clip_actions_);
     this->get_parameter("usd2urdf", usd2urdf_);
     this->get_parameter("clip_cmd", clip_cmd_);
+    this->get_parameter("clip_posture", clip_posture_);
+    // 姿态/高度限幅缺省值 (老配置没有该字段时用契约默认 ±10° / ±7cm)
+    if (clip_posture_.empty()) {
+        clip_posture_ = {-0.1745, 0.1745, -0.1745, 0.1745, -0.07, 0.07};
+    }
     this->get_parameter("joint_default_angle", joint_default_angle_);
     this->get_parameter("joint_limits", joint_limits_);
     this->get_parameter("gravity_z_upper", gravity_z_upper_);
@@ -215,6 +221,7 @@ void InferenceNode::load_config() {
     print_vector<long int>("wheel_joint_indices", wheel_joint_indices_);
     print_vector<long int>("usd2urdf", usd2urdf_);
     print_vector<double>("clip_cmd", clip_cmd_);
+    print_vector<double>("clip_posture", clip_posture_);
     print_vector<double>("joint_default_angle", joint_default_angle_);
     print_vector<double>("joint_limits", joint_limits_);
     RCLCPP_INFO(this->get_logger(), "gravity_z_upper: %f", gravity_z_upper_);
@@ -253,6 +260,24 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
             cmd_vel_[2] = std::clamp(msg->axes[5] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
         } else {
             cmd_vel_[2] = 0.0;
+        }
+
+        // 姿态/高度指令: 摇杆2 横向 -> pitch, 拨轮 -> roll, buttons[6]/[7] -> 高度升降
+        // axes[6]/axes[7] 由 dji_pad_publisher 填充; 老手柄/未填充时保持 0.
+        if (msg->axes.size() > 7) {
+            cmd_posture_[0] = static_cast<float>(
+                std::clamp(static_cast<double>(msg->axes[6]) * clip_posture_[1],
+                           clip_posture_[0], clip_posture_[1]));
+            cmd_posture_[1] = static_cast<float>(
+                std::clamp(static_cast<double>(msg->axes[7]) * clip_posture_[3],
+                           clip_posture_[2], clip_posture_[3]));
+        }
+        if (msg->buttons.size() > 7) {
+            // 按住升降: 每帧 0.002 m (50Hz ≈ 0.1 m/s), 停在当前高度 (不回中)
+            const double dh = 0.002 * (msg->buttons[6] - msg->buttons[7]);
+            cmd_posture_[2] = static_cast<float>(
+                std::clamp(static_cast<double>(cmd_posture_[2]) + dh,
+                           clip_posture_[4], clip_posture_[5]));
         }
     }
 

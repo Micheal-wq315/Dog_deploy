@@ -50,6 +50,9 @@ from sim_shutdown import shutdown  # noqa: E402
 from rp_wd_rl.assets.rp_wd_contract import (  # noqa: E402
     ACTION_CLIP,
     ACTION_SCALE,
+    CMD_HEIGHT_RANGE,
+    CMD_PITCH_RANGE,
+    CMD_ROLL_RANGE,
     CMD_VX_RANGE,
     CMD_VY_RANGE,
     CMD_WZ_RANGE,
@@ -156,6 +159,17 @@ check(
     "速度指令范围 (vx/vy/wz)",
     clip_cmd == [CMD_VX_RANGE[0], CMD_VX_RANGE[1], CMD_VY_RANGE[0], CMD_VY_RANGE[1], CMD_WZ_RANGE[0], CMD_WZ_RANGE[1]],
     f"{clip_cmd}",
+)
+clip_posture = [float(v) for v in deploy.get("clip_posture", [])]
+check(
+    "姿态/高度指令范围 (pitch/roll/h)",
+    clip_posture
+    == [
+        CMD_PITCH_RANGE[0], CMD_PITCH_RANGE[1],
+        CMD_ROLL_RANGE[0], CMD_ROLL_RANGE[1],
+        CMD_HEIGHT_RANGE[0], CMD_HEIGHT_RANGE[1],
+    ],
+    f"{clip_posture}",
 )
 print(f"  [INFO] 部署端观测限幅 clip_observations = {deploy['clip_observations']} (训练侧不需要, 仅作记录)")
 

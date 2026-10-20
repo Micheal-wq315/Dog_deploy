@@ -11,7 +11,14 @@ from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.terrains import TerrainImporter
 
-from rp_wd_rl.assets.rp_wd_contract import CMD_VX_RANGE, CMD_VY_RANGE, CMD_WZ_RANGE
+from rp_wd_rl.assets.rp_wd_contract import (
+    CMD_HEIGHT_RANGE,
+    CMD_PITCH_RANGE,
+    CMD_ROLL_RANGE,
+    CMD_VX_RANGE,
+    CMD_VY_RANGE,
+    CMD_WZ_RANGE,
+)
 
 
 def command_lin_vel_curriculum(
@@ -100,3 +107,35 @@ def terrain_levels_vel(
     move_down *= ~move_up
     terrain.update_env_origins(env_ids, move_up, move_down)
     return torch.mean(terrain.terrain_levels.float())
+
+def posture_command_curriculum(
+    env: ManagerBasedRLEnv,
+    env_ids,
+    command_name: str = "base_posture",
+    start_scale: float = 0.0,
+    end_scale: float = 1.0,
+    warmup_steps: int = 4800,
+    ramp_steps: int = 24000,
+) -> float:
+    """把姿态/高度指令幅度从 ``start_scale`` 逐步放大到 ``end_scale``.
+
+    为什么要它: 一开始就让 ±10° 姿态 + ±7 cm 高度和速度同时学, 早期容易又摔又跟不准.
+    先只学"站住 + 跑起来"(姿态指令=0), 等基础能力稳了再逐步加入姿态/高度目标 ——
+    与速度课程同样的思路, 只是作用在另一个指令项上.
+
+    单位同 `command_lin_vel_curriculum`: 策略步 (1 迭代 = num_steps_per_env = 24 步).
+    默认 warmup 4800 步 ≈ 200 迭代, ramp 24000 步 ≈ 1000 迭代.
+    """
+    counter = env.common_step_counter
+    if counter <= warmup_steps:
+        scale = start_scale
+    else:
+        progress = min(1.0, (counter - warmup_steps) / max(ramp_steps, 1))
+        scale = start_scale + (end_scale - start_scale) * progress
+
+    term = env.command_manager.get_term(command_name)
+    r = term.cfg.ranges
+    r.pitch = (CMD_PITCH_RANGE[0] * scale, CMD_PITCH_RANGE[1] * scale)
+    r.roll = (CMD_ROLL_RANGE[0] * scale, CMD_ROLL_RANGE[1] * scale)
+    r.height = (CMD_HEIGHT_RANGE[0] * scale, CMD_HEIGHT_RANGE[1] * scale)
+    return scale

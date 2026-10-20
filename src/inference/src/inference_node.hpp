@@ -321,6 +321,7 @@ class InferenceNode : public rclcpp::Node {
     std::vector<long int> wheel_joint_indices_;            // 速度控制关节的 USD 索引 (轮子)
     float clip_actions_;                                   // 动作截断阈值
     std::vector<double> clip_cmd_;                         // 速度指令限幅 [x_min, x_max, y_min, y_max, yaw_min, yaw_max]
+    std::vector<double> clip_posture_;                     // 姿态/高度限幅 [pitch_min,max, roll_min,max, h_min,max]
     std::vector<double> joint_default_angle_;              // 关节默认角度 (零点位置)
     std::vector<double> joint_limits_;                     // 关节软限位 [lower, upper, lower, upper, ...]
     std::vector<long int> usd2urdf_;                       // USD→URDF 关节索引映射
@@ -374,6 +375,7 @@ class InferenceNode : public rclcpp::Node {
     std::vector<float> act_vel_;                            // 当前策略输出的目标关节速度 (轮子) [joint_num]
     std::vector<float> last_act_vel_;                       // 上一帧的速度输出 (用于 EMA 平滑)
     std::vector<float> cmd_vel_;                            // 速度指令 [vx, vy, ωz] (3 维)
+    std::vector<float> cmd_posture_;                        // 机身姿态/高度指令 [pitch, roll, h] (3 维)
     std::vector<float> interrupt_action_;                   // 中断模式下外部发送的关节目标
     std::vector<float> perception_obs_buffer_;              // 感知观测缓存 (高度图等)
     std::vector<float> joint_pos_buffer_;                   // 关节位置缓存 (从硬件读取)
@@ -459,6 +461,7 @@ class InferenceNode : public rclcpp::Node {
     //   模式数据:     is_interrupt_ (中断模式标志)
     // =========================================================================
     void get_cmd_vel_obs(std::vector<float>& segment);      // 速度指令 "cmd_vel":3
+    void get_cmd_posture_obs(std::vector<float>& segment);  // 姿态/高度指令 "cmd_posture":3
     void get_ang_vel_obs(std::vector<float>& segment);      // 角速度 "ang_vel":3
     void get_gravity_b_obs(std::vector<float>& segment);    // 重力方向 "gravity_b":3
     void get_dof_pos_obs(std::vector<float>& segment);      // 关节位置 "dof_pos":23

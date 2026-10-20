@@ -56,7 +56,19 @@ def generate_launch_description():
         DeclareLaunchArgument("deadzone", default_value="0.10", description="摇杆死区"),
         DeclareLaunchArgument(
             "calibrate_wz", default_value="true",
-            description="启动时对转向轴做中点标定 (补偿机械偏置)",
+            description="启动时对转向/姿态轴做中点标定 (补偿机械偏置)",
+        ),
+        DeclareLaunchArgument(
+            "pitch_axis", default_value="left_x",
+            description="pitch 来源轴 (默认左摇杆横向; 该轴不回中, 语义=配平)",
+        ),
+        DeclareLaunchArgument(
+            "roll_axis", default_value="dial",
+            description="roll 来源轴 (默认拨轮; 不回中, 语义=配平)",
+        ),
+        DeclareLaunchArgument(
+            "udp_port", default_value="5005",
+            description="UDP 转发端口 (给仿真侧 test_policy.py --teleop udp; 0=关闭)",
         ),
     ]
 
@@ -68,6 +80,9 @@ def generate_launch_description():
             "-p", ["wz_axis:=", LaunchConfiguration("wz_axis")],
             "-p", ["deadzone:=", LaunchConfiguration("deadzone")],
             "-p", ["calibrate_wz:=", LaunchConfiguration("calibrate_wz")],
+            "-p", ["pitch_axis:=", LaunchConfiguration("pitch_axis")],
+            "-p", ["roll_axis:=", LaunchConfiguration("roll_axis")],
+            "-p", ["udp_port:=", LaunchConfiguration("udp_port")],
         ],
         name="dji_pad_publisher",
         output="screen",

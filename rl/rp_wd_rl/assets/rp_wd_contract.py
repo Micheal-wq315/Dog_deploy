@@ -91,12 +91,21 @@ FRAME_STACK = 3  # 观测帧栈长度 (部署端 frame_stacks)
 POLICY_FREQ = 1.0 / POLICY_DT
 
 # 速度指令范围 —— 部署端 clip_cmd: [vx_min,vx_max, vy_min,vy_max, wz_min,wz_max]
-# 2026-10-11 定版: vx ±1.0, vy ±0.6 (横移靠侧向刮擦, 物理上限低), wz ±1.0.
+# 2026-10-20 训练课程重构: 速度降到 ±0.6 (强调控制精度而非极速), wz 保持 ±1.0.
 # 注意: 这是**契约变更**, 必须同步改 src/inference/robots/wheel_quad/configs/default.yaml
 # 的 clip_cmd (verify_contract.py 会逐项核对), 否则实机会按旧限幅截断指令.
-CMD_VX_RANGE = (-1.0, 1.0)
+CMD_VX_RANGE = (-0.6, 0.6)
 CMD_VY_RANGE = (-0.6, 0.6)
 CMD_WZ_RANGE = (-1.0, 1.0)
+
+# 机身姿态指令 (rad): 俯仰 / 横滚。2026-10-16 新增 —— 摇杆2 纵向给 pitch, 拨轮给 roll。
+#   符号约定 (由机体系重力反算): pitch = asin(g_x) 抬头为正; roll = atan2(g_y, -g_z) 右侧下沉为正
+#   (静止时 gravity_b = (0,0,-1) -> pitch = roll = 0)
+# 2026-10-20: 姿态指令收到 ±10° (运动时允许约 10° 倾斜, 但要求能主动控制这个倾角,
+# 而不是被动地"被甩到多少算多少"); 另外增加**高度指令** (轮足靠腿部伸缩改变机身高度)。
+CMD_PITCH_RANGE = (-0.1745, 0.1745)   # ±10°
+CMD_ROLL_RANGE = (-0.1745, 0.1745)    # ±10°
+CMD_HEIGHT_RANGE = (-0.07, 0.07)      # 相对站立高度 0.419 m 的偏移 [m]
 
 # 部署端 clip_actions: 对模型**原始输出**裁剪 ±10 (在缩放与偏置之前)
 ACTION_CLIP = 10.0
@@ -109,6 +118,9 @@ OBS_LAYOUT = (
     ("dof_pos", 12),
     ("dof_vel", 16),
     ("last_action", 16),
+    # 机身姿态+高度指令 (pitch, roll, height_offset) —— 追加在末尾, 部署端的帧栈/拼接
+    # 逻辑按分量列表通用处理, 所以老分量的偏移全不变。
+    ("cmd_posture", 3),
 )
 OBS_NUM = sum(dim for _, dim in OBS_LAYOUT)  # 53
 ONNX_INPUT_DIM = OBS_NUM * FRAME_STACK  # 159

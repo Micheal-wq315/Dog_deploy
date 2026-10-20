@@ -108,6 +108,10 @@ const std::vector<ObsSourceDefinition>& InferenceNode::obs_source_definitions() 
         // 指令数据: 速度指令 [vx, vy, ωz] (来自手柄摇杆或 /cmd_vel 话题)
         {"cmd_vel", &InferenceNode::get_cmd_vel_obs},
 
+        // 指令数据: 机身姿态/高度指令 [pitch, roll, height_offset]
+        // (手柄: 摇杆2 横向 -> pitch, 拨轮 -> roll, buttons[6]/[7] -> 高度升降)
+        {"cmd_posture", &InferenceNode::get_cmd_posture_obs},
+
         // 本体感知: 关节位置 (电机编码器读数, 维度由 obs_layout 指定, 经 usd2urdf 重排)
         {"dof_pos", &InferenceNode::get_dof_pos_obs},
 
@@ -396,6 +400,25 @@ void InferenceNode::get_cmd_vel_obs(std::vector<float>& segment) {
     segment[0] = cmd_vel_[0] * obs_scales_lin_vel_;  // vx 缩放
     segment[1] = cmd_vel_[1] * obs_scales_lin_vel_;  // vy 缩放
     segment[2] = cmd_vel_[2] * obs_scales_ang_vel_;  // ωz 缩放
+}
+
+// ============================================================================
+// get_cmd_posture_obs — 机身姿态/高度指令观测 (pitch, roll, height_offset)
+//
+// 数据源 (手柄模式):
+//   摇杆2 横向  -> pitch  (抬头为正, rad)
+//   拨轮        -> roll   (右侧下沉为正, rad)
+//   buttons[6]/[7] -> 高度升降 (相对站立高度, m; 按住每帧 ±0.002, 50Hz ≈ 0.1 m/s)
+//
+// 符号约定与训练侧契约一致 (见 get_gravity_b_obs 的坐标系说明):
+//   pitch = asin(g_x), roll = atan2(g_y, -g_z); 水平静止时均为 0
+// 不做缩放 (契约里 obs_scales_* 全为 1.0).
+// ============================================================================
+void InferenceNode::get_cmd_posture_obs(std::vector<float>& segment) {
+    std::unique_lock<std::mutex> lock(cmd_mutex_);
+    segment[0] = cmd_posture_[0];
+    segment[1] = cmd_posture_[1];
+    segment[2] = cmd_posture_[2];
 }
 
 // ---------------------------------------------------------------------------

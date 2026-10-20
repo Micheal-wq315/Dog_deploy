@@ -96,7 +96,8 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 | PD 增益 | 腿 `kp=100 kd=3`；轮 `kp=0 kd=3` | `robot.yaml` 的 `kp`/`kd` |
 | 力矩限幅 | 腿 42 N·m；轮 17 N·m | — |
 | 站立默认姿态 | ABAD 0 / HIP 0.72 / KENN -1.41 | `joint_default_angle` |
-| 指令范围 | vx ±1.0 vy ±0.6 ωz ±1.0 | `clip_cmd` |
+| 速度指令 | vx ±0.6 vy ±0.6 ωz ±1.0 | `clip_cmd` |
+| 姿态/高度指令 | pitch ±10° roll ±10° height ±7 cm | `clip_posture` |
 | 倾角保护 (2026-10-11 提速版) | `bad_orientation` 60° | `gravity_z_upper: -0.5`（acos(0.5)=60°）→ 急停 |
 | 关节顺序 | articulation 顺序 = `[ABAD×4, HIP×4, KENN×4, FOOT×4]`（组内 LB/LF/RB/RF） | `usd2urdf: [8,0,12,4,…]`、`wheel_joint_indices: [12,13,14,15]` |
 

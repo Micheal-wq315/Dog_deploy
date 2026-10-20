@@ -258,6 +258,7 @@ void InferenceNode::reset_runtime_state() {
     {
         std::unique_lock<std::mutex> lock(cmd_mutex_);
         std::fill(cmd_vel_.begin(), cmd_vel_.end(), 0.0f);
+        std::fill(cmd_posture_.begin(), cmd_posture_.end(), 0.0f);
     }
     // 感知观测清零
     {
@@ -337,6 +338,7 @@ void InferenceNode::initialize_runtime_state() {
 
     // 分配数据缓冲区
     cmd_vel_.assign(3, 0.0f);                                     // [vx, vy, ωz]
+    cmd_posture_.assign(3, 0.0f);                                 // [pitch, roll, height]
     act_.assign(joint_num_, 0.0f);                                 // 当前动作输出 [16]
     last_act_.assign(joint_num_, 0.0f);                            // 上一帧动作 (用于 EMA 平滑)
     act_vel_.assign(joint_num_, 0.0f);                             // 当前速度输出 (轮子) [16]

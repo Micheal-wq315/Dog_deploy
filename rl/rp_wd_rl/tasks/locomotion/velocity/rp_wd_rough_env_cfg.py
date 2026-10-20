@@ -138,10 +138,10 @@ class RPWDRoughEnvCfg(RPWDFlatEnvCfg):
         # ---- 3) 奖励调整 (这 5 项在平地版是对的, 在崎岖地形会把策略压成"不敢动") ----
         # 抬轮上台阶时, 轮子必然瞬时离地/失配, 权重 -10 会直接压制越障动作
         self.rewards.wheel_rolling_slip.weight = -2.5
-        # 坡道上俯仰是必要的: 20° 坡 gravity_xy=0.34, 权重 -2.0 每回合要扣 -230
-        self.rewards.flat_orientation_l2.weight = -0.4
-        # 绝对高度目标会惩罚爬升, 降到 -0.3
-        self.rewards.base_height_l2.weight = -0.3
+        # 坡上姿态本身就难跟 (指令 pitch/roll 叠加坡面倾角), 跟踪权重略降
+        self.rewards.attitude_track_exp.weight = 0.4
+        # 坡上"绝对高度"跟踪意义弱 (地形起伏), 高度跟踪权重降到 0.2
+        self.rewards.height_track_exp.weight = 0.2
         # 台阶上四轮同时着地比例天然下降, 别把爬台阶罚亏
         self.rewards.all_wheels_contact.weight = 0.3
         # 爬阶时小腿(KENN)蹭地是合法的, 阈值 1 N -> 5 N

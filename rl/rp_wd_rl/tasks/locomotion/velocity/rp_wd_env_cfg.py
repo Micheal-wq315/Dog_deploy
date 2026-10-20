@@ -108,6 +108,10 @@ class CommandsCfg:
         ),
     )
 
+    # 机身姿态+高度指令 (pitch/roll/height): 实机上由摇杆2 纵向、拨轮、按键给出。
+    # 单独一项 (而不是塞进 base_velocity) -> 观测里是独立分量, 部署端只需加一项 layout。
+    base_posture = mdp.UniformPostureCommandCfg()
+
 
 ##
 # 动作
@@ -183,6 +187,10 @@ class ObservationsCfg:
         )
         # 5) 上一帧动作 16 维 (原始输出, 未缩放未偏置 —— 与部署端一致)
         actions = ObsTerm(func=mdp.last_action)
+        # 6) 机身姿态+高度指令 (pitch, roll, height) 3 维 —— 必须放在最后, 与契约 OBS_LAYOUT 一致
+        posture_commands = ObsTerm(
+            func=mdp.generated_commands, params={"command_name": "base_posture"}
+        )
 
         def __post_init__(self):
             # 训练时打开观测噪声 (play 时关闭); 噪声在 term 级配置
@@ -333,11 +341,25 @@ class RewardsCfg:
     # ---- 姿态与平顺 ----
     lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.03)
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
-    base_height_l2 = RewTerm(
-        func=mdp.base_height_l2,
-        weight=-1.0,
-        params={"target_height": STAND_HEIGHT, "asset_cfg": SceneEntityCfg("robot")},
+    # 姿态跟踪 (exp 核): 有姿态指令后 "保持水平" 不再是目标, 而是"跟踪指令的 pitch/roll".
+    # 用 exp 核而不是 L2 —— 姿态误差只有 0.02~0.05 rad, L2 加权后量级远小于速度奖励,
+    # 根本无法体现"重点突出控制能力".
+    attitude_track_exp = RewTerm(
+        func=mdp.attitude_track_exp,
+        weight=0.6,
+        params={"command_name": "base_posture", "std": 0.10, "asset_cfg": SceneEntityCfg("robot")},
+    )
+    # 超过约 10° 的倾斜才罚: 允许运动时自然摆动, 但禁止大前倾/大侧倾
+    attitude_limit_l2 = RewTerm(
+        func=mdp.attitude_limit_l2,
+        weight=-5.0,
+        params={"limit": 0.1745, "asset_cfg": SceneEntityCfg("robot")},
+    )
+    # 高度跟踪 (exp 核): 目标 = 站立高度 + 指令高度偏移
+    height_track_exp = RewTerm(
+        func=mdp.height_track_exp,
+        weight=0.4,
+        params={"command_name": "base_posture", "std": 0.04, "asset_cfg": SceneEntityCfg("robot")},
     )
     dof_torques_l2 = RewTerm(
         func=mdp.joint_torques_l2, weight=-1.0e-5, params={"asset_cfg": SceneEntityCfg("robot")}
@@ -389,13 +411,24 @@ class RewardsCfg:
     # 注意用的是自定义的 wheels_in_contact_frac, 不是 mdp.desired_contacts (后者语义相反)
     all_wheels_contact = RewTerm(
         func=mdp.wheels_in_contact_frac,
-        weight=0.5,
+        weight=1.0,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=[".*_FOOT_LINK"]), "threshold": 1.0},
     )
-    # 髋侧摆保持 0: 四条腿平行, 避免撇腿支撑
+    # 腿部关节角速度惩罚: 抑制"抬腿换位" —— 实测横移时策略会用对角腿交替抬起错开重心,
+    # 仿真可行但 sim2real 很差 (冲击大、支撑面小、轮子侧向刮擦)
+    leg_joint_vel_l2 = RewTerm(
+        func=mdp.leg_joint_vel_l2,
+        weight=-5.0e-4,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", joint_names=[".*_ABAD_JOINT", ".*_HIP_JOINT", ".*_KENN_JOINT"]
+            )
+        },
+    )
+    # 髋侧摆保持 0: 四条腿平行, 避免撇腿支撑 (权重加强, 配合上面的腿速惩罚)
     joint_deviation_abad = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.2,
+        weight=-0.5,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ABAD_JOINT"])},
     )
     # 躯体/小腿触地 = 摔倒或姿态塌陷
@@ -427,6 +460,18 @@ class CurriculumCfg:
             "warmup_steps": 240,      # ≈10 迭代
             "ramp_steps": 24000,      # ≈1000 迭代 (1 迭代 = 24 策略步)
             "ramp_angular": False,    # 角速度一直保持满额 (实测偏航跟踪本就很好)
+        },
+    )
+
+    # 姿态/高度指令幅度课程: 先学站住跑起来, 再逐步加姿态目标
+    posture_command = CurrTerm(
+        func=mdp.posture_command_curriculum,
+        params={
+            "command_name": "base_posture",
+            "start_scale": 0.0,
+            "end_scale": 1.0,
+            "warmup_steps": 4800,   # ≈200 迭代
+            "ramp_steps": 24000,    # ≈1000 迭代
         },
     )
 

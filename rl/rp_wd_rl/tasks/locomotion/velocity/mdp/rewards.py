@@ -94,3 +94,77 @@ def wheel_torque_l2(
     """轮电机力矩平方和 — RS02 额定 6 N·m / 峰值 17 N·m, 抑制长时间大扭矩."""
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.applied_torque[:, asset_cfg.joint_ids]), dim=1)
+
+def _pitch_roll(asset: Articulation) -> tuple[torch.Tensor, torch.Tensor]:
+    """由机体系投影重力反算 (pitch, roll), 与契约符号约定一致."""
+    g = asset.data.projected_gravity_b
+    pitch = torch.asin(torch.clamp(g[:, 0], -1.0, 1.0))   # 抬头为正
+    roll = torch.atan2(g[:, 1], -g[:, 2])                 # 右侧下沉为正
+    return pitch, roll
+
+
+def attitude_track_exp(
+    env: ManagerBasedRLEnv,
+    command_name: str = "base_posture",
+    std: float = 0.10,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """机身姿态 (pitch/roll) 跟踪奖励: exp(-(e_pitch² + e_roll²) / std²).
+
+    用 exp 核而不是 L2: 姿态误差本来就小 (0.02~0.05 rad), L2 加权后量级远小于速度奖励,
+    根本"突出"不出来. exp 核的满额权重与速度跟踪同量级, 才能真正把控制精度顶上去.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    pitch, roll = _pitch_roll(asset)
+    err_sq = torch.square(pitch - command[:, 0]) + torch.square(roll - command[:, 1])
+    return torch.exp(-err_sq / std**2)
+
+
+def attitude_limit_l2(
+    env: ManagerBasedRLEnv,
+    limit: float = 0.1745,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """超出允许倾角的部分的 L2 惩罚 (默认 10°).
+
+    跟踪奖励管"跟准指令", 这一项管"别超过 10°": 允许运动时自然摆动到 10° 左右,
+    再多就罚 —— 对应需求"减少前倾和左右倾斜, 允许约 10° 的运动倾斜".
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    pitch, roll = _pitch_roll(asset)
+    over_p = torch.clamp(pitch.abs() - limit, min=0.0)
+    over_r = torch.clamp(roll.abs() - limit, min=0.0)
+    return torch.square(over_p) + torch.square(over_r)
+
+
+def height_track_exp(
+    env: ManagerBasedRLEnv,
+    command_name: str = "base_posture",
+    std: float = 0.04,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """机身高度跟踪奖励: exp(-(z - (STAND_HEIGHT + cmd_height))² / std²)."""
+    from rp_wd_rl.assets.rp_wd_contract import STAND_HEIGHT
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    target = STAND_HEIGHT + command[:, 2]
+    err_sq = torch.square(asset.data.root_pos_w[:, 2] - target)
+    return torch.exp(-err_sq / std**2)
+
+
+def leg_joint_vel_l2(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg(
+        "robot", joint_names=[".*_ABAD_JOINT", ".*_HIP_JOINT", ".*_KENN_JOINT"]
+    ),
+) -> torch.Tensor:
+    """腿部关节 (不含轮) 角速度平方和 —— 抑制"抬腿换位"式运动.
+
+    针对实测问题: 左右横移时策略会用对角腿交替抬起、错开重心来侧挪 (对角腿错开).
+    这种步态在仿真里可行, 但 sim2real 很差 (冲击、支撑面小、轮子侧向刮擦).
+    惩罚腿部关节速度, 等于逼它"用轮子滚, 而不是用腿挪".
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    return torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)

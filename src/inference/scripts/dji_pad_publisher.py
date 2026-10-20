@@ -79,6 +79,7 @@ import glob
 import math
 import os
 import select
+import socket
 import struct
 import sys
 import threading
@@ -355,6 +356,15 @@ class DjiPadPublisher(Node):
         self.declare_parameter("calibrate_max_offset", 0.15)
         # 油门取自哪个轴 (拨轮 ABS_RY 天然"可锁定", 适合当油门)
         self.declare_parameter("throttle_axis", "dial")
+        # 机身姿态指令来源轴: pitch 默认左摇杆横向 (ABS_Z, 不回中, 语义=配平),
+        # roll 默认拨轮 (同样不回中, 语义=配平). 都发布到 /joy 的 axes[6]/[7].
+        self.declare_parameter("pitch_axis", "left_x")
+        self.declare_parameter("roll_axis", "dial")
+        # 高度指令上限 (m): 由 buttons[6]/[7] 升降, 与 inference_node 的逻辑一致
+        self.declare_parameter("max_height", 0.07)
+        # UDP 转发端口 (0 = 关闭): 给仿真侧 test_policy.py --teleop udp 用,
+        # 仿真环境的 python 是 3.11, 装不了系统 rclpy 3.10, 所以用 UDP 桥而不是 ROS.
+        self.declare_parameter("udp_port", 5005)
 
         # 控制量限幅, 默认对齐 wheel_quad/configs/default.yaml 的 clip_cmd
         self.declare_parameter("max_vx", 1.0)
@@ -401,8 +411,15 @@ class DjiPadPublisher(Node):
         self.calibrate_seconds = max(0.0, float(gp("calibrate_seconds").value))
         self.calibrate_max_offset = abs(float(gp("calibrate_max_offset").value))
         self.throttle_axis = str(gp("throttle_axis").value)
-        self._wz_offset = 0.0          # 标定出的零点偏移
-        self._calib_samples = []       # 标定采样
+        self.pitch_axis = str(gp("pitch_axis").value)
+        self.roll_axis = str(gp("roll_axis").value)
+        self.max_height = abs(float(gp("max_height").value))
+        self._height_cmd = 0.0          # 高度指令 (latching, 由按键升降)
+        self.udp_port = int(gp("udp_port").value)
+        self._udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self.udp_port > 0 else None
+        # 各指令源轴的中点偏移 (启动标定得到)
+        self._offsets = {"left_x": 0.0, "left_y": 0.0, "right_x": 0.0, "right_y": 0.0, "dial": 0.0}
+        self._calib_samples = []       # 标定采样 (wz, pitch, roll)
         self._calib_done = not self.calibrate_wz
 
         # 左右摇杆分组: swap 后 (X,Y) 变左杆, (Z,RX) 变右杆
@@ -499,34 +516,41 @@ class DjiPadPublisher(Node):
         right_x = apply_expo(apply_deadzone(right_x_raw, self.deadzone), self.expo)
         right_y = apply_expo(apply_deadzone(right_y_raw, self.deadzone), self.expo)
 
-        # ── 转向来源 + 启动中点标定 ───────────────────────────────────
+        # ── 指令源 + 启动中点标定 ─────────────────────────────────────
         # 为什么要标定: 实测本手柄某轴静止时有偏置 (ABS_Z 静止 -0.36), 不补偿的话
-        # "松手"就等于持续给转向指令。见文件头「为什么转向不用左摇杆横向」。
-        wz_raw = {
+        # "松手"就等于持续给指令。见文件头「为什么转向不用左摇杆横向」。
+        src = {
             "left_x": left_x_raw,
             "left_y": left_y_raw,
             "right_x": right_x_raw,
             "right_y": right_y_raw,
             "dial": dial_raw,
-        }[self.wz_axis]
+        }
+        wz_raw = src[self.wz_axis]
+        pitch_raw = src[self.pitch_axis]
+        roll_raw = src[self.roll_axis]
+        axes_used = (self.wz_axis, self.pitch_axis, self.roll_axis)
         if not self._calib_done:
-            self._calib_samples.append(wz_raw)
+            self._calib_samples.append((wz_raw, pitch_raw, roll_raw))
             if len(self._calib_samples) >= max(1, int(self.calibrate_seconds * self.rate)):
-                # 取中位数 (对偶发跳变比均值稳)
-                center = sorted(self._calib_samples)[len(self._calib_samples) // 2]
-                if abs(center) <= self.calibrate_max_offset:
-                    self._wz_offset = center
-                    self.get_logger().info(
-                        "转向轴 %s 中点标定: 偏移 %+.3f 已补偿 (标定 %d 帧)"
-                        % (self.wz_axis, center, len(self._calib_samples)))
-                else:
-                    self.get_logger().warn(
-                        "转向轴 %s 标定偏移 %+.3f 超过 %.2f —— 标定时是否在推杆? "
-                        "本次不补偿; 松开摇杆重跑本节点即可"
-                        % (self.wz_axis, center, self.calibrate_max_offset))
+                for col, name in enumerate(axes_used):
+                    vals = sorted(s_[col] for s_ in self._calib_samples)
+                    center = vals[len(vals) // 2]      # 中位数 (对偶发跳变比均值稳)
+                    if abs(center) <= self.calibrate_max_offset:
+                        self._offsets[name] = center
+                        self.get_logger().info(
+                            "轴 %-7s 中点标定: 偏移 %+.3f 已补偿 (标定 %d 帧)"
+                            % (name, center, len(self._calib_samples)))
+                    else:
+                        self.get_logger().warn(
+                            "轴 %-7s 标定偏移 %+.3f 超过 %.2f —— 标定时是否在推杆? "
+                            "本次不补偿; 松开摇杆重跑本节点即可"
+                            % (name, center, self.calibrate_max_offset))
                 self._calib_done = True
         # 先扣标定中点, 再过死区/曲线 —— 保证"松手 = 零指令"
-        wz = apply_expo(apply_deadzone(wz_raw - self._wz_offset, self.deadzone), self.expo)
+        wz = apply_expo(apply_deadzone(wz_raw - self._offsets[self.wz_axis], self.deadzone), self.expo)
+        pitch = apply_expo(apply_deadzone(pitch_raw - self._offsets[self.pitch_axis], self.deadzone), self.expo)
+        roll = apply_expo(apply_deadzone(roll_raw - self._offsets[self.roll_axis], self.deadzone), self.expo)
 
         # ── 油门 (默认拨轮: 天然可锁定, 适合当油门) ────────────────────
         throttle_raw = {
@@ -537,6 +561,13 @@ class DjiPadPublisher(Node):
             "right_y": right_y_raw,
         }.get(self.throttle_axis, dial_raw)
         throttle = min(1.0, max(0.0, (throttle_raw + 1.0) * 0.5))
+
+        # ── 高度指令 (buttons[6]/[7] 升降, latching; 与 inference_node 一致) ──
+        if buttons.get(BUTTON_CODES[6], 0):
+            self._height_cmd += 0.002
+        if buttons.get(BUTTON_CODES[7], 0):
+            self._height_cmd -= 0.002
+        self._height_cmd = min(self.max_height, max(-self.max_height, self._height_cmd))
 
         # ── 控制量 ───────────────────────────────────────────────────
         # 右摇杆 -> 平移; 转向 -> wz (默认左摇杆纵向, 自回中)。
@@ -559,7 +590,8 @@ class DjiPadPublisher(Node):
             msg.header.stamp = stamp
             msg.header.frame_id = "dji_pad"
             # 长度固定 8: inference_node 无越界检查地读 axes[2..5] / buttons[0..5]
-            msg.axes = [left_x, left_y_raw, 0.0, right_x, right_y, 0.0, dial_raw, 0.0]
+            # axes[6]/[7] = 姿态指令 (pitch/roll), 与 inference_node 的 cmd_posture 读取对应
+            msg.axes = [left_x, left_y_raw, 0.0, right_x, right_y, 0.0, pitch, roll]
             if self.yaw_compat:
                 # inference_node 的转向逻辑: axes[2]<0 取 -axes[2], axes[5]<0 取 axes[5]
                 # 把 wz 按符号拆成两半即可得到双向转向, 且静止时两路都为 0
@@ -569,6 +601,16 @@ class DjiPadPublisher(Node):
                 msg.axes[2] = wz
             msg.buttons = [buttons.get(c, 0) for c in BUTTON_CODES]
             self.pub_joy.publish(msg)
+
+        # ── UDP 转发 (给仿真侧的 test_policy.py --teleop udp) ──────────
+        if self._udp is not None:
+            try:
+                self._udp.sendto(
+                    struct.pack("<6f", vx, vy, wz, pitch, roll, self._height_cmd),
+                    ("127.0.0.1", self.udp_port),
+                )
+            except OSError:
+                pass   # 没人在听就算了, 不影响 ROS 侧
 
         # ── /dji_pad/cmd_vel ─────────────────────────────────────────
         if self.pub_cmd is not None:

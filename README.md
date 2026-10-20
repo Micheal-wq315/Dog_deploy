@@ -141,14 +141,20 @@ ros2 launch roboparty_inference dji_pad.launch.py policy:=policy_flat  # 指定�
 ros2 launch roboparty_inference dji_pad.launch.py start_inference:=false  # 只发 /joy 调试手柄
 ```
 
-**摇杆**（右摇杆平移、左摇杆纵向转向 —— 轴分配原因见下）：
+**摇杆/旋钮/按键**（摇杆1 平移、摇杆2 转向+俯仰、拨轮横滚、按键调高度）：
 
-| 控件 | 功能 |
-|------|------|
-| **右摇杆 上下** (axes[4]) | 前进 / 后退 |
-| **右摇杆 左右** (axes[3]) | 左右平移 |
-| **左摇杆 上下** | 左转 / 右转 |
-| 左摇杆 左右 | 空闲（该轴松手不回中，见下方说明） |
+| 控件 | 功能 | 语义 |
+|------|------|------|
+| **右摇杆 上下** (axes[4]) | 前进 / 后退 | 按住生效，松手归零 |
+| **右摇杆 左右** (axes[3]) | 左右平移 | 按住生效，松手归零 |
+| **左摇杆 上下** | 左转 / 右转 (wz) | 按住生效，松手归零（自回中） |
+| **左摇杆 左右** | 机身俯仰 (pitch, ±10°) | **配平式**：不回中，停在哪就是多少 |
+| **拨轮** | 机身横滚 (roll, ±10°) | **配平式**：不回中 |
+| **buttons[6] / [7]** | 机身高度升 / 降 (±7 cm) | 按住升降，松开停在当前高度 |
+
+> **配平式**（不回中）是由手柄硬件决定的：这两根轴松手后电位器不回到中点。
+> 对"姿态配平"来说这恰好合理（设一个倾角然后保持），但要知道**它不会自己回零** ——
+> 想回水平就手动推回（或按 A 复位姿态/关节）。
 
 **按键**：
 
@@ -160,10 +166,12 @@ ros2 launch roboparty_inference dji_pad.launch.py start_inference:=false  # 只�
 | **Y** (buttons[3]) | 切换手柄控制 ↔ /cmd_vel 话题控制 |
 
 **安全说明（重要）**：DJI 手柄的左摇杆**横轴**松手不回中，实测静止读数为 −0.36
-（其它三个摇杆轴静止都是 0.00）。若用它做转向，**没人碰手柄机器人也会持续自转**。
-因此默认把转向放在自回中的**左摇杆纵向**上，横轴留空。
-如需换回横轴：`ros2 launch ... wz_axis:=left_x calibrate_wz:=true`（先用启动中点标定补偿偏置，
-但该轴漂移较大，不建议）。
+（其它三个摇杆轴静止都是 0.00）。若用它做**转向**，没人碰手柄机器人也会持续自转，
+因此转向放在自回中的**左摇杆纵向**上。横轴改作 **pitch（配平式）** —— 它只影响机身姿态，
+不会让机器人跑起来，松手停住是可接受甚至期望的行为。
+
+启动时会自动对转向/pitch/roll 三个源轴做**中点标定**（采样 1 秒取中位数），
+把机械偏置补掉；偏移超过 0.15 会判为"标定时在推杆"并告警、不补偿。
 
 手柄发布者也可单独运行（看实时轴值、调死区/反向）：
 
@@ -176,11 +184,29 @@ ros2 topic echo /joy                                                 # 看输出
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `wz_axis` | `left_y` | 转向来源轴: left_y / left_x / right_x / right_y / dial |
+| `pitch_axis` | `left_x` | 俯仰来源轴（配平式） |
+| `roll_axis` | `dial` | 横滚来源轴（配平式） |
+| `max_height` | 0.07 | 高度指令上限 [m]（buttons[6]/[7] 升降） |
 | `deadzone` | 0.10 | 摇杆死区 |
-| `calibrate_wz` | true | 启动时对转向轴做中点标定（补偿机械偏置） |
+| `calibrate_wz` | true | 启动时对转向/pitch/roll 轴做中点标定 |
 | `swap_sticks` | false | 左右摇杆对调 |
 | `invert_*` | false | 各轴方向反转 |
-| `max_vx/max_vy/max_wz` | 1.0 / 0.6 / 1.0 | 控制量限幅（对齐 `wheel_quad/configs/default.yaml` 的 `clip_cmd`） |
+| `max_vx/max_vy/max_wz` | 0.6 / 0.6 / 1.0 | 控制量限幅（对齐 `wheel_quad/configs/default.yaml` 的 `clip_cmd`） |
+| `udp_port` | 5005 | UDP 转发端口（给仿真侧；0=关闭） |
+
+**在仿真里用 DJI 手柄遥控**（不需要 ROS 也能驱动仿真，走 UDP 桥）：
+
+```bash
+# 终端 1: 手柄发布者 (系统 python, 会往 127.0.0.1:5005 发 6 float 包)
+source /opt/ros/humble/setup.bash
+/usr/bin/python3 src/inference/scripts/dji_pad_publisher.py
+
+# 终端 2: Isaac Sim 仿真侧读 UDP
+./rl/scripts/teleop.sh --teleop udp            # 或 --rough 在地形上
+```
+
+原因是仿真跑在 conda 的 python 3.11 下，装不了系统 rclpy(3.10)，所以用 UDP 而不是直接订阅 `/joy`；
+超过 0.5 秒收不到包会自动归零，防止手柄掉线后机器人继续跑。
 
 ### ROS2 Service 接口
 

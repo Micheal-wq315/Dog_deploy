@@ -13,7 +13,7 @@ inference_node:
     ros__parameters:
         model_names: ["policy_flat.onnx"]
         obs_layouts:
-          - "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:12, dof_vel:16, last_action:16"
+          - "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:12, dof_vel:16, last_action:16, cmd_posture:3"
         frame_stacks: [3]
         obs_stack_orders: ["obs_major"]
         act_alpha: 0.9
@@ -42,9 +42,13 @@ inference_node:
         # URDF (部署, 按腿分组):         [LF, RF, LB, RB] × [ABAD, HIP, KENN, FOOT]
         usd2urdf: [8, 0, 12, 4, 9, 1, 13, 5, 10, 2, 14, 6, 11, 3, 15, 7]
 
+        # 姿态/高度指令限幅 [pitch_min, pitch_max, roll_min, roll_max, h_min, h_max]
+        # pitch/roll 单位 rad (±10°), h 为相对站立高度的偏移 (m)
+        clip_posture: [-0.1745, 0.1745, -0.1745, 0.1745, -0.07, 0.07]
+
         # 速度指令限幅 [vx_min, vx_max, vy_min, vy_max, ωz_min, ωz_max]
         clip_cmd:
-            [-1.0, 1.0,
+            [-0.6, 0.6,
              -0.6, 0.6,
              -1.0, 1.0]
 

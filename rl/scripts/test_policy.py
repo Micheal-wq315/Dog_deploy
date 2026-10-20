@@ -42,10 +42,12 @@ parser.add_argument("--terrain-level", type=int, default=None,
                     help="崎岖地形难度等级 0-5 (0=最易, 5=最难); 默认用 Play 配置里的 2 级.")
 parser.add_argument("--export", action="store_true", default=False, help="同时导出 ONNX 到 rl/exported/.")
 parser.add_argument(
-    "--teleop", type=str, default=None, choices=["gamepad", "keyboard"],
+    "--teleop", type=str, default=None, choices=["gamepad", "keyboard", "udp"],
     help="遥控模式: 用手柄/键盘手动驾驶策略 (自动按真实 50Hz 步进, 指令裁剪到训练范围).",
 )
 parser.add_argument("--teleop-scale", type=float, default=1.0, help="遥控最大速度的缩放系数 (默认 1.0).")
+parser.add_argument("--udp-port", type=int, default=5005,
+                    help="--teleop udp 时监听的端口 (与 dji_pad_publisher 的 udp_port 一致).")
 parser.add_argument(
     "--real-time", action=argparse.BooleanOptionalAction, default=None,
     help="按真实 50 Hz 步进 (GUI 观察用); 默认: GUI 下开, headless 下关.",
@@ -115,6 +117,55 @@ def hold_command(env, cmd: tuple[float, float, float]) -> None:
     term.time_left[:] = 1.0e9  # 阻止 resample
 
 
+class UdpCommandDevice:
+    """从 dji_pad_publisher 的 UDP 包读取控制量.
+
+    为什么用 UDP 而不是直接订阅 ROS 的 /joy: 仿真跑在 conda 的 python 3.11 下,
+    系统 rclpy 只有 3.10 的扩展, 装不进这个环境. 发布者 (系统 python) 把控制量打成
+    6 个 little-endian float32 发到 127.0.0.1:<port>, 这里非阻塞读取最新一包.
+
+    包格式: (vx, vy, wz, pitch, roll, height_offset)
+    超过 0.5 s 没收到包就归零 —— 手柄/发布者挂掉时不能让机器人继续跑.
+    """
+
+    def __init__(self, port: int):
+        import socket
+
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.bind(("127.0.0.1", port))
+        self._sock.setblocking(False)
+        self._last = (0.0,) * 6
+        self._last_time = 0.0
+
+    def reset(self):
+        self._last = (0.0,) * 6
+        self._last_time = 0.0
+
+    def advance(self):
+        import struct
+        import time
+
+        while True:
+            try:
+                data, _ = self._sock.recvfrom(64)
+            except BlockingIOError:
+                break
+            if len(data) >= 24:
+                self._last = struct.unpack("<6f", data[:24])
+                self._last_time = time.time()
+        if time.time() - self._last_time > 0.5:
+            return torch.zeros(6)
+        return torch.tensor(self._last, dtype=torch.float32)
+
+
+def hold_posture(env, posture) -> None:
+    """把姿态/高度指令钉死 (pitch, roll, height_offset)."""
+    term = env.command_manager.get_term("base_posture")
+    val = torch.tensor(posture, dtype=torch.float32, device=env.device).expand(env.num_envs, 3)
+    term.posture_command[:] = val
+    term.time_left[:] = 1.0e9
+
+
 def make_teleop_device(kind: str, device_str: str, scale: float = 1.0):
     """创建 SE(2) 遥操作设备 (手柄或键盘), 用于手动驾驶策略.
 
@@ -135,6 +186,8 @@ def make_teleop_device(kind: str, device_str: str, scale: float = 1.0):
     }
     if kind == "gamepad":
         device = Se2Gamepad(Se2GamepadCfg(**common))
+    elif kind == "udp":
+        device = UdpCommandDevice(args_cli.udp_port)
     else:
         device = Se2KeyboardWASD(Se2KeyboardWASDCfg(**common))
     device.reset()
@@ -144,6 +197,7 @@ def make_teleop_device(kind: str, device_str: str, scale: float = 1.0):
 TELEOP_HELP = {
     "gamepad": "左摇杆 ↑↓=前进/后退, 左摇杆 ←→=左右平移, 右摇杆 ←→=左转/右转",
     "keyboard": "W/S=前进/后退, A/D=左移/右移, E=左转, Q=右转 (也支持方向键/小键盘8-4-6-2-7-9)",
+    "udp": "DJI 手柄经 UDP 桥 (先在另一终端跑 dji_pad_publisher.py; 右杆平移/左杆纵向转向/左杆横向pitch/拨轮roll/按键升降高度)",
 }
 
 
@@ -220,6 +274,10 @@ def run_continuous(env, wrapped, policy) -> None:
         if device is not None:
             # 遥控: 读设备 -> 裁剪到训练指令范围 -> 钉进命令管理器
             cmd = device.advance().to(env.device).flatten()
+            if cmd.numel() >= 6:
+                # UDP 桥: 后 3 维是姿态/高度指令
+                hold_posture(env, cmd[3:6].tolist())
+                cmd = cmd[:3]
             cmd[0] = cmd[0].clamp(*CMD_VX_RANGE)
             cmd[1] = cmd[1].clamp(*CMD_VY_RANGE)
             cmd[2] = cmd[2].clamp(*CMD_WZ_RANGE)
