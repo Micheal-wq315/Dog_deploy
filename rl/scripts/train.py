@@ -40,7 +40,7 @@ parser.add_argument("--log_project_name", type=str, default=None, help="wandb/ne
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-if args_cli.video:
+if args_cli.video or "OdinDepth" in args_cli.task:
     args_cli.enable_cameras = True
 
 # 训练一律无头运行: 强制关掉 Isaac Sim 图形窗口.

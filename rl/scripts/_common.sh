@@ -18,6 +18,8 @@ fi
 
 if [[ "${CONDA_DEFAULT_ENV:-}" != "${CONDA_ENV}" ]]; then
     # shellcheck disable=SC1090
+    # Isaac Lab 的 conda activate hook 会直接展开 PYTHONPATH; set -u 下先初始化空值。
+    export PYTHONPATH="${PYTHONPATH:-}"
     source "${CONDA_SH}"
     conda activate "${CONDA_ENV}"
 fi

@@ -35,6 +35,7 @@ void InferenceNode::load_config() {
     this->declare_parameter<float>("act_alpha", 0.9);
     this->declare_parameter<int>("intra_threads", -1);
     this->declare_parameter<std::string>("perception_obs_topic", "elevation_data");
+    this->declare_parameter<float>("perception_timeout_s", 0.25);
     this->declare_parameter<int>("joint_num", 16);
     this->declare_parameter<int>("decimation", 8);
     this->declare_parameter<float>("dt", 0.0025);
@@ -43,6 +44,7 @@ void InferenceNode::load_config() {
     this->declare_parameter<float>("obs_scales_dof_pos", 1.0);
     this->declare_parameter<float>("obs_scales_dof_vel", 1.0);
     this->declare_parameter<float>("obs_scales_gravity_b", 1.0);
+    this->declare_parameter<float>("obs_scales_dof_torque", 1.0);
     this->declare_parameter<float>("clip_observations", 100.0);
     this->declare_parameter<std::vector<double>>("action_scales", std::vector<double>{});
     this->declare_parameter<std::vector<long int>>("wheel_joint_indices", std::vector<long int>{});
@@ -79,6 +81,7 @@ void InferenceNode::load_config() {
     this->get_parameter("act_alpha", act_alpha_);
     this->get_parameter("intra_threads", intra_threads_);
     this->get_parameter("perception_obs_topic", perception_obs_topic_);
+    this->get_parameter("perception_timeout_s", perception_timeout_s_);
     this->get_parameter("joint_num", joint_num_);
     this->get_parameter("decimation", decimation_);
     this->get_parameter("dt", dt_);
@@ -87,6 +90,7 @@ void InferenceNode::load_config() {
     this->get_parameter("obs_scales_dof_pos", obs_scales_dof_pos_);
     this->get_parameter("obs_scales_dof_vel", obs_scales_dof_vel_);
     this->get_parameter("obs_scales_gravity_b", obs_scales_gravity_b_);
+    this->get_parameter("obs_scales_dof_torque", obs_scales_dof_torque_);
     this->get_parameter("clip_observations", clip_observations_);
     this->get_parameter("action_scales", action_scales_);
     this->get_parameter("wheel_joint_indices", wheel_joint_indices_);
@@ -397,9 +401,13 @@ void InferenceNode::subs_elevation_callback(const std::shared_ptr<std_msgs::msg:
             std::fill(perception_obs_buffer_.begin(), perception_obs_buffer_.end(), 0.0f);
             return;
         }
-        std::copy(msg->data.begin(),
-                  msg->data.begin() + perception_obs_buffer_.size(),
-                  perception_obs_buffer_.begin());
+        for (size_t i = 0; i < perception_obs_buffer_.size(); ++i) {
+            const float value = msg->data[i];
+            // Adapter 输出 [0, 1] (0=近, 1=远); 清除坏值并限制异常数据范围。
+            perception_obs_buffer_[i] = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+        }
+        perception_last_update_ = std::chrono::steady_clock::now();
+        perception_received_ = true;
     }
 }
 

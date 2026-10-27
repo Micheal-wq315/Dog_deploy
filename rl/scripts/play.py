@@ -7,8 +7,8 @@
     # 指定 checkpoint
     /media/rmer/data/IsaacLab/isaaclab.sh -p rl/scripts/play.py --checkpoint rl/logs/rsl_rl/rp_wd_flat/2026-.../model_2999.pt
 
-导出结果: rl/exported/policy_flat.onnx (输入 obs[1,159] -> 输出 actions[1,16]),
-导出后会自动校验输入/输出维度与算子能否被 onnxruntime 加载.
+导出结果: 普通策略为 policy_flat.onnx; OdinDepth 任务导出 policy_odin_depth.onnx.
+导出时从当前任务观测推导输入维度, 并校验输出 16 维与 ONNX Runtime 推理.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ parser.add_argument("--export_dir", type=str, default=None, help="导出目录 (
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-if args_cli.video:
+if args_cli.video or "OdinDepth" in args_cli.task:
     args_cli.enable_cameras = True
 
 sys.argv = [sys.argv[0]] + hydra_args
@@ -114,8 +114,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     # ---- 导出 ONNX (部署端用) ----
     if not args_cli.no_export:
         export_dir = os.path.abspath(args_cli.export_dir) if args_cli.export_dir else DEFAULT_EXPORT_DIR
-        dst = export_and_verify(runner, export_dir)
-        print(f"[INFO] 部署: cp {dst} src/inference/robots/wheel_quad/models/policy_flat.onnx")
+        current_obs = env.get_observations()
+        expected_dim = int(current_obs["policy"].shape[-1])
+        output_name = "policy_odin_depth.onnx" if "OdinDepth" in args_cli.task else "policy_flat.onnx"
+        dst = export_and_verify(
+            runner, export_dir, expected_input_dim=expected_dim, output_filename=output_name
+        )
+        print(f"[INFO] 部署: cp {dst} src/inference/robots/wheel_quad/models/{output_name}")
 
     # ---- 回放 ----
     dt = env.unwrapped.step_dt

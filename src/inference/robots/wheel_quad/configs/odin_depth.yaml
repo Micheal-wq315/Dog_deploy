@@ -1,0 +1,44 @@
+# Odin1 深度避障策略 profile.
+# 训练 ONNX 输入: 260 单帧维度 × 3 帧 = 780; 输出仍为 16 维动作.
+inference_node:
+    ros__parameters:
+        model_names: ["policy_odin_depth.onnx"]
+        obs_layouts:
+          - "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:12, dof_vel:16, last_action:16, cmd_posture:3, leg_torque:12, perception:192"
+        frame_stacks: [3]
+        obs_stack_orders: ["obs_major"]
+        act_alpha: 0.9
+        joint_num: 16
+        decimation: 8
+        intra_threads: 1
+        dt: 0.0025
+        obs_scales_lin_vel: 1.0
+        obs_scales_ang_vel: 1.0
+        obs_scales_dof_pos: 1.0
+        obs_scales_dof_vel: 1.0
+        obs_scales_gravity_b: 1.0
+        obs_scales_dof_torque: 0.0238095238  # 1 / 42 Nm, 与训练侧腿力矩归一化相同
+        clip_observations: 100.0
+        perception_obs_topic: "/odin1/depth_features"
+        perception_timeout_s: 0.25
+        action_scales:
+            [0.125, 0.125, 0.125, 0.125,
+             0.25, 0.25, 0.25, 0.25,
+             0.25, 0.25, 0.25, 0.25,
+             5.0, 5.0, 5.0, 5.0]
+        wheel_joint_indices: [12, 13, 14, 15]
+        clip_actions: 10.0
+        usd2urdf: [8, 0, 12, 4, 9, 1, 13, 5, 10, 2, 14, 6, 11, 3, 15, 7]
+        clip_posture: [-0.1745, 0.1745, -0.1745, 0.1745, -0.07, 0.07]
+        clip_cmd: [-0.6, 0.6, -0.6, 0.6, -1.0, 1.0]
+        joint_default_angle:
+            [0.0, 0.72, -1.41, 0.0,
+             0.0, 0.72, -1.41, 0.0,
+             0.0, 0.72, -1.41, 0.0,
+             0.0, 0.72, -1.41, 0.0]
+        joint_limits:
+            [-1.0, 1.0, -1.57, 3.49, -2.7, -0.83, -1e9, 1e9,
+             -1.0, 1.0, -1.57, 3.49, -2.7, -0.83, -1e9, 1e9,
+             -1.0, 1.0, -1.57, 3.49, -2.7, -0.83, -1e9, 1e9,
+             -1.0, 1.0, -1.57, 3.49, -2.7, -0.83, -1e9, 1e9]
+        gravity_z_upper: -0.5

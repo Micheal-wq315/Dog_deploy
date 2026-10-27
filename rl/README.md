@@ -7,7 +7,7 @@
         训练侧 (本目录)                                部署侧 (src/inference)
 ┌──────────────────────────────┐              ┌──────────────────────────────────┐
 │ Isaac Lab 2.3.2              │              │ roboparty_inference (ROS2)       │
-│  RP_wd USD (description/)    │  ONNX 159→16 │  obs 拼接 53×3 → ONNX → 动作后处理 │
+│  RP_wd USD (description/)    │  ONNX 168→16 │  obs 拼接 56×3 → ONNX → 动作后处理 │
 │  PPO (rsl-rl) → policy.onnx  │ ───────────► │  → MIT 指令 (CAN) → 电机          │
 └──────────────────────────────┘              └──────────────────────────────────┘
         rl/exported/policy_flat.onnx          src/inference/robots/wheel_quad/models/
@@ -53,10 +53,14 @@ export ISAACLAB_PATH=/media/rmer/data/IsaacLab
 ./rl/scripts/train.sh
 ./rl/scripts/train.sh --num_envs 4096 --max_iterations 5000 --run_name dr_v1
 
+# Odin1 深度避障策略 (独立 profile; headless 相机渲染; 默认 256 env / 5000 iter)
+./rl/scripts/train_odin_depth.sh --run_name odin1_v1
+
 # 2) 回放 (需要图形界面) + 导出 ONNX
 ./rl/scripts/play.sh
 ./rl/scripts/play.sh --headless --video --video_length 300   # 无显示器: 录视频
-# 导出: rl/exported/policy_flat.onnx  (自动校验输入 159 / 输出 16 / 权重已内嵌)
+# 普通策略: policy_flat.onnx (168 → 16); 深度策略使用 --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0
+# 深度 checkpoint 用 --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 回放并导出 780 → 16 的模型
 
 # 3) 部署 (单文件, 直接覆盖即可)
 cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_flat.onnx
@@ -84,9 +88,9 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 |---|---|---|
 | 物理步长 / 降采样 | `sim.dt=0.0025`, `decimation=8` | `dt: 0.0025`, `decimation: 8` |
 | 策略频率 | 50 Hz | 50 Hz (`inference_node.cpp:516`) |
-| 观测（单帧 53 维） | `ang_vel(3) + projected_gravity(3) + cmd(3) + joint_pos(12,腿) + joint_vel(16) + last_action(16)` | `obs_layout: "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:12, dof_vel:16, last_action:16"` |
+| 普通策略观测（单帧 56 维） | `ang_vel(3) + projected_gravity(3) + cmd(3) + joint_pos(12,腿) + joint_vel(16) + last_action(16) + cmd_posture(3)` | `configs/default.yaml` 中的观测布局 |
 | 帧栈 | `history_length=3`, term-major, 每分量旧→新 | `frame_stacks:[3]`, `obs_stack_orders:["obs_major"]` |
-| ONNX 输入/输出 | 159 / 16 (`obs` / `actions`) | 159 / 16（`setup_model` 只校验元素数） |
+| 普通策略 ONNX 输入/输出 | 168 / 16 (`obs` / `actions`) | 168 / 16 |
 | 关节位置观测 | 相对默认姿态 (`joint_pos_rel`) | 读值 − `joint_default_angle` |
 | 关节速度观测 | 全部 16 关节（含轮） | `dof_vel:16`（含轮） |
 | `last_action` | **原始**动作（未缩放/未偏置，经 `clip_actions` 裁剪） | ONNX 原始输出（裁剪后） |
@@ -100,6 +104,26 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 | 姿态/高度指令 | pitch ±10° roll ±10° height ±7 cm | `clip_posture` |
 | 倾角保护 (2026-10-11 提速版) | `bad_orientation` 60° | `gravity_z_upper: -0.5`（acos(0.5)=60°）→ 急停 |
 | 关节顺序 | articulation 顺序 = `[ABAD×4, HIP×4, KENN×4, FOOT×4]`（组内 LB/LF/RB/RF） | `usd2urdf: [8,0,12,4,…]`、`wheel_joint_indices: [12,13,14,15]` |
+
+### Odin1 深度避障策略
+
+深度输入使用独立任务、ONNX 和部署 YAML，不覆盖普通 168→16 策略：
+
+| 项目 | 配置 |
+|---|---|
+| ONNX | `policy_odin_depth.onnx`，输入 780 (=260×3)，输出仍为 16 |
+| 单帧新增观测 | 腿部力矩 12 维 (仿真/实机均按 42 N·m 归一化)；深度 12×16=192 维 |
+| 深度增强 | 0.03 m 高斯噪声、1% 随机缺测、80–100% 随机裁切/缩放，特征采用每格最近距离并归一化到 0..1 |
+| 仿真相机 | 前向 160×120、约 120°×90°、0.2–6 m；安装位姿是待实测标定的初始估值 |
+| 障碍课程 | 继承轮足 rough 地形、摩擦/质量/质心/执行器/关节/IMU/推力随机化，并增加箱体障碍 |
+| 力矩惩罚课程 | 约第 3500 iter 开始，500 iter 渐增到 `dof_torques_l2=-1e-5` |
+| 任务 ID | `Isaac-Velocity-Rough-RPWD-OdinDepth-v0` / `...-OdinDepth-Play-v0` |
+| ROS2 部署 | Odin1 官方深度图 → `odin_depth_adapter.launch.py` → `/odin1/depth_features` → `policy:=odin_depth` |
+
+一键 headless 训练：`./rl/scripts/train_odin_depth.sh --run_name odin1_v1`。
+用 `./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint <path>`
+做仿真回放并导出专属 ONNX。当前策略消费三帧深度网格历史；
+Odin1 空间记忆功能本身尚未作为单独输入接入。
 
 **最容易写错的两点**（都已在校验脚本里逐项检查）：
 

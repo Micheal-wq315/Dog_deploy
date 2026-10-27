@@ -15,6 +15,7 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_srvs</depend>
+  <exec_depend>cv_bridge</exec_depend>
   <depend>roboparty_imu</depend>
   <depend>roboparty_motors</depend>
 

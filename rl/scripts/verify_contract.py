@@ -5,7 +5,7 @@
 
 校验两类内容:
   A. 静态契约 (毫秒级, 读 YAML/URDF 对比训练侧常量)
-     - 观测布局与维度 (53 × 帧栈 3 = 159)
+     - 既有策略 56×3=168, Odin1 深度策略 260×3=780
      - 动作缩放 / 轮子索引 / USD↔URDF 关节顺序映射 / 默认姿态
      - 控制周期 dt × decimation
   B. 运行时语义 (需要启动仿真, 约 1 分钟)
@@ -38,6 +38,7 @@ args_cli, _ = parser.parse_known_args()
 
 # 校验脚本一律无头运行, 不需要图形窗口
 args_cli.headless = True
+args_cli.enable_cameras = True  # OdinDepth runtime contract includes a tiled depth camera.
 
 if not args_cli.no_sim:
     app_launcher = AppLauncher(args_cli)
@@ -68,6 +69,11 @@ from rp_wd_rl.assets.rp_wd_contract import (  # noqa: E402
     OBS_LAYOUT,
     ONNX_INPUT_DIM,
     ONNX_OUTPUT_DIM,
+    ODIN_DEPTH_DEPLOY_CONFIG_PATH,
+    ODIN_DEPTH_FEATURE_DIM,
+    ODIN_DEPTH_OBS_LAYOUT,
+    ODIN_DEPTH_ONNX_INPUT_DIM,
+    LEG_TORQUE_SCALE,
     RP_WD_URDF_PATH,
     SIM_DT,
     STIFFNESS,
@@ -173,6 +179,43 @@ check(
 )
 print(f"  [INFO] 部署端观测限幅 clip_observations = {deploy['clip_observations']} (训练侧不需要, 仅作记录)")
 
+# A1b. Odin1 perception policy profile (kept separate from the legacy model)
+with open(ODIN_DEPTH_DEPLOY_CONFIG_PATH, "r", encoding="utf-8") as f:
+    depth_deploy = yaml.safe_load(f)["inference_node"]["ros__parameters"]
+depth_layout = [part.strip() for part in depth_deploy["obs_layouts"][0].split(",")]
+depth_names = [part.split(":")[0] for part in depth_layout]
+depth_dims = [int(part.split(":")[1]) for part in depth_layout]
+check(
+    "Odin1 观测分量顺序",
+    depth_names == [name for name, _ in ODIN_DEPTH_OBS_LAYOUT],
+    f"{depth_names}",
+)
+check(
+    "Odin1 观测维度",
+    depth_dims == [dim for _, dim in ODIN_DEPTH_OBS_LAYOUT],
+    f"{depth_dims}",
+)
+check(
+    "Odin1 ONNX 输入 780 = 260×3",
+    sum(depth_dims) * int(depth_deploy["frame_stacks"][0]) == ODIN_DEPTH_ONNX_INPUT_DIM,
+    f"{sum(depth_dims)}×{depth_deploy['frame_stacks'][0]}",
+)
+check(
+    "Odin1 感知输入维度与 12×16 网格一致",
+    depth_dims[depth_names.index("perception")] == ODIN_DEPTH_FEATURE_DIM,
+    f"perception:{depth_dims[depth_names.index('perception')]}",
+)
+check(
+    "腿部力矩归一化缩放",
+    abs(float(depth_deploy["obs_scales_dof_torque"]) - LEG_TORQUE_SCALE) < 1.0e-8,
+    f"{depth_deploy['obs_scales_dof_torque']}",
+)
+check(
+    "Odin1 adapter 话题一致",
+    depth_deploy["perception_obs_topic"] == "/odin1/depth_features",
+    f"{depth_deploy['perception_obs_topic']}",
+)
+
 # A6. PD 增益 (部署端 robot.yaml 是 URDF/电机顺序)
 with open(DEPLOY_ROBOT_YAML_PATH, "r", encoding="utf-8") as f:
     robot_yaml = yaml.safe_load(f)
@@ -201,7 +244,7 @@ if not args_cli.no_sim:
     from isaaclab_tasks.utils.parse_cfg import parse_env_cfg  # noqa: E402
 
     # 用 Play 变体: 域随机化全部关闭, 增益/默认姿态都是标称值, 便于逐项核对
-    task = "Isaac-Velocity-Flat-RPWD-Play-v0"
+    task = "Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0"
     env_cfg = parse_env_cfg(task, device=args_cli.device, num_envs=args_cli.num_envs)
     env = gym.make(task, cfg=env_cfg).unwrapped
     obs, _ = env.reset()
@@ -214,12 +257,16 @@ if not args_cli.no_sim:
         print(f"        实际: {list(robot.joint_names)}")
 
     # B2. 维度
-    check("观测向量维度 = 159", obs["policy"].shape[-1] == 159, f"{tuple(obs['policy'].shape)}")
+    check(
+        "观测向量维度 = 契约 ONNX 输入",
+        obs["policy"].shape[-1] == ODIN_DEPTH_ONNX_INPUT_DIM,
+        f"{tuple(obs['policy'].shape)} (期望 {ODIN_DEPTH_ONNX_INPUT_DIM})",
+    )
     check("动作向量维度 = 16", env.action_manager.total_action_dim == 16, f"{env.action_manager.total_action_dim}")
     term_dim = env.observation_manager.group_obs_term_dim["policy"]
     blocks = [int(torch.tensor(d).prod()) for d in term_dim]  # 每项 flatten 后总长 (含帧栈)
     print(f"  [INFO] 观测项维度: {term_dim} -> 每项长度 {blocks}")
-    expected_blocks = [dim * frame_stack for dim in layout_dims]
+    expected_blocks = [dim * frame_stack for _, dim in ODIN_DEPTH_OBS_LAYOUT]
     check(
         "观测各项占用长度 = 部署端 layout × 帧栈",
         blocks == expected_blocks,
@@ -272,8 +319,11 @@ if not args_cli.no_sim:
     env.step(ones)
     zeros = torch.zeros(env.num_envs, 16, device=env.device)
     obs2 = env.step(zeros)[0]  # ManagerBasedRLEnv 返回 5 元组 (obs, rew, terminated, truncated, info)
-    # last_action 分量落在最后 frame_stack×16 = 48 维
-    last_action_block = obs2["policy"][0, -16 * frame_stack :].reshape(frame_stack, 16)
+    # last_action 分量在布局里的位置从 OBS_LAYOUT 推算 —— 它后面可能还有别的分量
+    # (例如 cmd_posture), 不能写死"最后 48 维"
+    _terms = [n for n, _ in ODIN_DEPTH_OBS_LAYOUT]
+    _la_start = sum(d for _, d in OBS_LAYOUT[: _terms.index("last_action")]) * frame_stack
+    last_action_block = obs2["policy"][0, _la_start : _la_start + 16 * frame_stack].reshape(frame_stack, 16)
     first_elems = [float(last_action_block[i, 0]) for i in range(frame_stack)]
     expected = [0.0, 1.0, 0.0]
     check(
@@ -293,6 +343,16 @@ if not args_cli.no_sim:
         bool(torch.allclose(cmd_block, obs2["policy"][0, 18:21].repeat(frame_stack))),
         f"cmd 三帧首元素 = {cmd_block[::3].tolist()}",
     )
+    depth_start = sum(dim for _, dim in ODIN_DEPTH_OBS_LAYOUT[: _terms.index("perception")]) * frame_stack
+    depth_block = obs["policy"][:, depth_start : depth_start + ODIN_DEPTH_FEATURE_DIM * frame_stack]
+    check(
+        "仿真 Odin1 深度网格有限且归一化到 0..1",
+        bool(torch.isfinite(depth_block).all())
+        and bool((depth_block >= 0.0).all())
+        and bool((depth_block <= 1.0).all()),
+        f"min={depth_block.min().item():.3f}, max={depth_block.max().item():.3f}",
+    )
+    check("Odin1 相机已挂入场景", "odin_depth_camera" in env.scene.sensors)
     del env
 else:
     print("\n[INFO] 跳过运行时检查 (--no-sim)")

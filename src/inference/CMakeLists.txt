@@ -86,6 +86,9 @@ install(TARGETS robot utils
 install(DIRECTORY scripts
   DESTINATION share/${PROJECT_NAME}
 )
+install(PROGRAMS scripts/odin_depth_adapter.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 install(DIRECTORY launch 
   DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY robots

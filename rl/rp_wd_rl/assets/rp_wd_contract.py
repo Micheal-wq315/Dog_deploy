@@ -21,6 +21,7 @@ RP_WD_USD_PATH = os.path.join(REPO_ROOT, "description", "RP_wd", "usd", "RP_wd.u
 RP_WD_URDF_PATH = os.path.join(REPO_ROOT, "description", "RP_wd", "urdf", "RP_wd.urdf")
 DEPLOY_ROBOT_DIR = os.path.join(REPO_ROOT, "src", "inference", "robots", "wheel_quad")
 DEPLOY_CONFIG_PATH = os.path.join(DEPLOY_ROBOT_DIR, "configs", "default.yaml")
+ODIN_DEPTH_DEPLOY_CONFIG_PATH = os.path.join(DEPLOY_ROBOT_DIR, "configs", "odin_depth.yaml")
 DEPLOY_ROBOT_YAML_PATH = os.path.join(DEPLOY_ROBOT_DIR, "robot.yaml")
 DEPLOY_MODEL_DIR = os.path.join(DEPLOY_ROBOT_DIR, "models")
 
@@ -122,6 +123,21 @@ OBS_LAYOUT = (
     # 逻辑按分量列表通用处理, 所以老分量的偏移全不变。
     ("cmd_posture", 3),
 )
-OBS_NUM = sum(dim for _, dim in OBS_LAYOUT)  # 53
-ONNX_INPUT_DIM = OBS_NUM * FRAME_STACK  # 159
+OBS_NUM = sum(dim for _, dim in OBS_LAYOUT)  # 56 (includes cmd_posture:3)
+ONNX_INPUT_DIM = OBS_NUM * FRAME_STACK  # 168, existing non-perception policy
 ONNX_OUTPUT_DIM = NUM_JOINTS  # 16
+
+# Odin1 depth policy profile.  The depth image is reduced to a 12x16 range grid
+# before it enters the actor; measured leg torques are normalized by the URDF
+# effort limit.  Keep this profile separate so old 168-input checkpoints remain
+# loadable without changing their deployment contract.
+LEG_TORQUE_SCALE = 1.0 / 42.0
+ODIN_DEPTH_IMAGE_SIZE = (160, 120)  # (width, height), same 4:3 aspect as Odin1
+ODIN_DEPTH_GRID_SIZE = (16, 12)     # (width, height)
+ODIN_DEPTH_FEATURE_DIM = ODIN_DEPTH_GRID_SIZE[0] * ODIN_DEPTH_GRID_SIZE[1]
+ODIN_DEPTH_OBS_LAYOUT = OBS_LAYOUT + (
+    ("leg_torque", 12),
+    ("perception", ODIN_DEPTH_FEATURE_DIM),
+)
+ODIN_DEPTH_OBS_NUM = sum(dim for _, dim in ODIN_DEPTH_OBS_LAYOUT)
+ODIN_DEPTH_ONNX_INPUT_DIM = ODIN_DEPTH_OBS_NUM * FRAME_STACK  # 780

@@ -2,15 +2,17 @@
 
 部署端只拷贝一个 .onnx 文件, 所以导出必须满足:
   1. 权重**内嵌** (torch 2.11 的导出器默认把权重写成 <name>.onnx.data, 必须合并)
-  2. 输入 159 维 / 输出 16 维 (部署端 inference_node.cpp 会校验输入元素数)
+  2. 输入维度按当前策略观测推导 / 输出 16 维 (部署端会校验输入元素数)
 """
 
 from __future__ import annotations
 
 import os
 
+from rp_wd_rl.assets.rp_wd_contract import ONNX_INPUT_DIM
+
 # 部署端契约: 输入 = 单帧观测 53 × 帧栈 3; 输出 = 16 个关节
-EXPECTED_INPUT_DIM = 159
+EXPECTED_INPUT_DIM = ONNX_INPUT_DIM
 EXPECTED_OUTPUT_DIM = 16
 
 
@@ -24,7 +26,7 @@ def consolidate_onnx(src: str, dst: str) -> None:
     onnx.save_model(model, dst, save_as_external_data=False)
 
 
-def verify_onnx(path: str) -> bool:
+def verify_onnx(path: str, expected_input_dim: int = EXPECTED_INPUT_DIM) -> bool:
     """用 onnxruntime 校验导出的模型与部署端契约一致."""
     import numpy as np
     import onnx
@@ -41,8 +43,8 @@ def verify_onnx(path: str) -> bool:
     out_dim = int(np.prod([d for d in out.shape if isinstance(d, int)]))
     print(f"[INFO] ONNX: 输入 '{inp.name}' {inp.shape} ({inp.type}) -> 输出 '{out.name}' {out.shape}")
     ok = True
-    if in_dim != EXPECTED_INPUT_DIM:
-        print(f"[FAIL] 输入元素数 {in_dim} != 期望 {EXPECTED_INPUT_DIM}")
+    if in_dim != expected_input_dim:
+        print(f"[FAIL] 输入元素数 {in_dim} != 期望 {expected_input_dim}")
         ok = False
     if out_dim != EXPECTED_OUTPUT_DIM:
         print(f"[FAIL] 输出元素数 {out_dim} != 期望 {EXPECTED_OUTPUT_DIM}")
@@ -68,17 +70,22 @@ def verify_onnx(path: str) -> bool:
     return ok
 
 
-def export_and_verify(runner, export_dir: str) -> str:
-    """导出单文件 ONNX 到 export_dir/policy_flat.onnx 并校验; 返回文件路径."""
+def export_and_verify(
+    runner,
+    export_dir: str,
+    expected_input_dim: int = EXPECTED_INPUT_DIM,
+    output_filename: str = "policy_flat.onnx",
+) -> str:
+    """导出单文件 ONNX 并按当前策略的 I/O 契约校验; 返回文件路径."""
     os.makedirs(export_dir, exist_ok=True)
     runner.export_policy_to_onnx(path=export_dir, filename="policy.onnx")
     src = os.path.join(export_dir, "policy.onnx")
-    dst = os.path.join(export_dir, "policy_flat.onnx")  # 与部署端 model_names 同名
+    dst = os.path.join(export_dir, output_filename)
     consolidate_onnx(src, dst)
     # 清掉带外部权重的中间文件, 避免误拷
     for stale in (src, f"{src}.data"):
         if os.path.exists(stale):
             os.remove(stale)
     print(f"[INFO] 已导出(单文件): {dst}  ({os.path.getsize(dst) / 1024:.0f} KB)")
-    verify_onnx(dst)
+    verify_onnx(dst, expected_input_dim=expected_input_dim)
     return dst

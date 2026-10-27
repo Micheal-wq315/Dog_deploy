@@ -264,6 +264,8 @@ void InferenceNode::reset_runtime_state() {
     {
         std::unique_lock<std::mutex> lock(perception_mutex_);
         std::fill(perception_obs_buffer_.begin(), perception_obs_buffer_.end(), 0.0f);
+        perception_last_update_ = {};
+        perception_received_ = false;
     }
     // 动作输出复位到默认关节角度
     {

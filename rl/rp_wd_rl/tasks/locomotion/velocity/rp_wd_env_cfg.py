@@ -4,8 +4,8 @@
 契约表见 rl/README.md, 复核脚本 rl/scripts/verify_contract.py.
 
   sim:      dt=0.0025 s, decimation=8          -> 策略 50 Hz (部署端一致)
-  obs:      ang_vel(3)+gravity(3)+cmd(3)+dof_pos(12)+dof_vel(16)+last_action(16) = 53
-            帧栈 3 (term-major, 旧->新)         -> ONNX 输入 159
+  obs:      ang_vel(3)+gravity(3)+cmd(3)+dof_pos(12)+dof_vel(16)+last_action(16)+cmd_posture(3) = 56
+            帧栈 3 (term-major, 旧->新)         -> ONNX 输入 168
   action:   [腿 12 位置, 轮 4 速度] = USD 顺序, 缩放 [0.125/0.25/0.25/5.0], 原值裁剪 ±10
 """
 
@@ -155,7 +155,7 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
-    """单帧 53 维, 帧栈 3 -> 159 维 (ONNX 输入)."""
+    """普通策略单帧 56 维 (含 cmd_posture), 帧栈 3 -> 168 维."""
 
     @configclass
     class PolicyCfg(ObsGroup):
@@ -477,6 +477,8 @@ class CurriculumCfg:
 
     # 崎岖地形版才启用 (见 rp_wd_rough_env_cfg.py); 这里预声明字段以便子类赋值
     terrain_levels: CurrTerm | None = None
+    # Odin1 感知课程版使用: 后期渐进开启腿部力矩惩罚
+    leg_torque_penalty: CurrTerm | None = None
 
 
 ##

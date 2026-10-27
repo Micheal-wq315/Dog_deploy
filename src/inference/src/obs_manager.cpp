@@ -118,6 +118,12 @@ const std::vector<ObsSourceDefinition>& InferenceNode::obs_source_definitions() 
         // 本体感知: 关节速度 (电机转速, 维度由 obs_layout 指定, 经 usd2urdf 重排)
         {"dof_vel", &InferenceNode::get_dof_vel_obs},
 
+        // 本体感知: 腿部关节力矩 (USD 顺序, 通常按 URDF effort limit 归一化)
+        {"leg_torque", &InferenceNode::get_dof_torque_obs},
+
+        // 外部感知: Odin1 深度适配节点发布的归一化距离网格
+        {"perception", &InferenceNode::get_perception_obs},
+
         // 历史数据: 上一帧 ONNX 模型的输出动作 (维度由 obs_layout 指定)
         // 这是训练/推理一致性的关键: 训练时网络也接收上一帧输出作为输入,
         // 部署时必须复现同样的输入格式
@@ -477,6 +483,39 @@ void InferenceNode::get_dof_vel_obs(std::vector<float>& segment) {
     for (int i = 0; i < n; i++) {
         segment[i] = joint_vel_buffer_[usd2urdf_[i]] * obs_scales_dof_vel_;
     }
+}
+
+// ---------------------------------------------------------------------------
+// get_dof_torque_obs — 腿部关节力矩反馈 (Nm), 从 URDF/CAN 顺序映射到 USD 顺序。
+// ---------------------------------------------------------------------------
+void InferenceNode::get_dof_torque_obs(std::vector<float>& segment) {
+    const std::vector<float> torque_urdf = robot_->get_joint_tau();
+    const size_t n = std::min(segment.size(), static_cast<size_t>(12));
+    for (size_t i = 0; i < n; ++i) {
+        const size_t urdf_index = static_cast<size_t>(usd2urdf_.at(i));
+        segment[i] = urdf_index < torque_urdf.size()
+                         ? std::clamp(torque_urdf[urdf_index] * obs_scales_dof_torque_, -1.0f, 1.0f)
+                         : 0.0f;
+    }
+    std::fill(segment.begin() + n, segment.end(), 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// get_perception_obs — Odin1 深度网格 (Float32MultiArray, 0..1 距离特征).
+// 未收到数据或数据过期时全零输入; 与训练中的近障碍端编码一致, 不把失联误报成远处空旷。
+// ---------------------------------------------------------------------------
+void InferenceNode::get_perception_obs(std::vector<float>& segment) {
+    std::unique_lock<std::mutex> lock(perception_mutex_);
+    const auto age = std::chrono::steady_clock::now() - perception_last_update_;
+    const bool stale = !perception_received_ ||
+        std::chrono::duration<float>(age).count() > perception_timeout_s_;
+    if (stale) {
+        std::fill(segment.begin(), segment.end(), 0.0f);
+        return;
+    }
+    const size_t n = std::min(segment.size(), perception_obs_buffer_.size());
+    std::copy_n(perception_obs_buffer_.begin(), n, segment.begin());
+    std::fill(segment.begin() + n, segment.end(), 0.0f);
 }
 
 // ---------------------------------------------------------------------------

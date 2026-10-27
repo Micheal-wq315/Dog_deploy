@@ -57,9 +57,9 @@ rl/
 | 项目 | 训练侧 | 部署侧 |
 |---|---|---|
 | 物理步长 / 降采样 | `sim.dt=0.0025`, `decimation=8` → **50 Hz** | `dt` / `decimation` |
-| 单帧观测 53 维 | ang_vel(3)+gravity(3)+cmd(3)+dof_pos(12,腿)+dof_vel(16)+last_action(16) | `obs_layouts` |
+| 普通策略单帧观测 56 维 | ang_vel(3)+gravity(3)+cmd(3)+dof_pos(12,腿)+dof_vel(16)+last_action(16)+cmd_posture(3) | `obs_layouts` |
 | 帧栈 3 | `history_length=3`, term-major, 每分量**旧→新**（最新在最后） | `frame_stacks:[3]`, `obs_major` |
-| ONNX I/O | `obs[1,159]` → `actions[1,16]`, 权重单文件内嵌 | 同左（名字 `obs`/`actions`） |
+| 普通策略 ONNX I/O | `obs[1,168]` → `actions[1,16]`, 权重单文件内嵌 | 同左（名字 `obs`/`actions`） |
 | 位置动作 | 腿 12 关节, scale 0.125/0.25/0.25, offset=默认姿态 | `act = raw×scale + joint_default_angle` |
 | 速度动作 | 轮 4 关节, scale 5.0, offset=0 | `act_vel = raw×5.0`（kp=0 纯阻尼） |
 | 动作裁剪 | `clip_actions=10.0`（作用于原始动作） | `clip_actions: 10.0` |
@@ -210,7 +210,7 @@ GPU 利用率 1%、**空转 12.8 小时**只跑到 101/3000。journal 无 OOM �
 `base_height_l2` −1.0→−0.3（绝对高度会惩罚爬升）、`all_wheels_contact` +0.5→+0.3、
 `undesired_contacts` 阈值 1→5 N（小腿蹭地合法）。
 
-**契约不受影响**：崎岖地形不加任何观测，159 维 / 16 维动作原样，部署端零改动。
+**普通策略契约不受影响**：崎岖地形不加观测，168 维 / 16 维动作保持一致，部署端零改动。
 
 ### 3.12 地形训练的性能代价（为什么慢 6 倍）
 
@@ -298,8 +298,8 @@ GPU 利用率 1%、**空转 12.8 小时**只跑到 101/3000。journal 无 OOM �
 5. 关节零点误差目前只加在观测上（近似），严格建模需同时偏移动作目标
 6. **崎岖地形已接入**（`Isaac-Velocity-Rough-RPWD-v0`），但训练代价高（约 9 小时/5000 迭代，
    见 3.12）；另有一份用户提供的 mesh 地形（STL/OBJ）待作为评估赛道接入
-7. **感知型策略（高程图）未做**：部署端 `extra_obs` 管道支持，但 wheel_quad 的
-   `perception` 回调已删除，需补约 30 行 C++；触发条件 = 实机盲走撞到 0.10 m 台阶 / 25° 坡天花板
+7. **Odin1 深度避障 profile 已接入，尚未训练/验收**：当前消费 ROS2 深度图生成的 12×16
+   距离特征和三帧历史；空间记忆模块本身、真实相机外参标定与实机效果仍待验证。
 
 ---
 
@@ -307,6 +307,7 @@ GPU 利用率 1%、**空转 12.8 小时**只跑到 101/3000。journal 无 OOM �
 
 | 日期 | 版本 | 内容 |
 |---|---|---|
+| 2026-10-27 | v9 | 新增 Odin1 深度避障 profile：160×120 仿真深度相机、随机箱体障碍、深度噪声/裁切/缺测、12 维腿部力矩反馈；约 3500–4000 iter 渐进加入力矩惩罚。新增 780→16 契约、ROS2 深度 adapter 与独立部署 YAML，提供 headless 5000 iter 训练和 `play.sh --task ...OdinDepth-Play-v0` 回放导出。静态与 RTX 5070 Ti headless 运行时契约均通过；ROS 包构建通过；尚未启动训练，尚无避障策略效果结论 |
 | 2026-10-11 | v7 | **新增 DJI 手柄 ROS2 发布者**（`src/inference/scripts/dji_pad_publisher.py`）：evdev 直读 DJI Virtual Joystick（USB `2ca3:1021`），发 Xbox 兼容 `/joy` + `/dji_pad/cmd_vel` 控制量。轴/按键数组**固定补齐到 8**，因 `inference_node.hpp` 无越界检查地读 `axes[2..5]`/`buttons[0..5]`，而该手柄实测只有 5 轴 8 键（描述符声明 24 键，实际仅 usage 1..8 存在）。轴映射：左杆横=ABS_Z(不回中)/左杆纵=ABS_RX、右杆横=ABS_X/纵=ABS_Y、拨轮=ABS_RY，5 轴行程均满量程 ±660；转向按订阅端 LT/RT 分支语义拆到 `axes[2]/axes[5]` 两半。★ 遗留风险：ABS_Z 是唯一松手不回中的轴且被分给左杆横向→wz，实测手柄静置未操作时仍恒输出 wz≈-0.37 rad/s，接真机前必须处理（换轴分配或改 wz 来源）。QoS 钉成 best_effort+KeepLast(1) 以匹配订阅端；掉线自动重连并强制发零 |
 | 2026-10-20 | v8 | 训练课程重构: 速度降到 ±0.6（重控制而非极速）；新增 **cmd_posture:3**（pitch/roll ±10° + 高度 ±7cm）指令通道与课程（先学速度再逐步加姿态）；姿态/高度用 exp 跟踪核；新增"超 10° 倾斜"惩罚与**腿部关节速度惩罚**（治横移时的对角腿错开）；部署端同步 cmd_posture + 手柄映射（pitch=摇杆2横、roll=拨轮、高度=buttons[6]/[7]）；新增 UDP 仿真桥（DJI 手柄 → Isaac Sim） |
 | 2026-10-12 | v7 | 部署端: DJI 手柄遥控打通 —— 转向轴改用自回中的左摇杆纵向（实测横轴松手停在 −0.36，用它会让机器人无人操作时持续自转）+ 启动中点标定；新增 `dji_pad.launch.py` 一条命令起手柄+推理节点；修两个构建阻塞（`build/install` 是从别的机器拷来的死路径缓存、cmake `CMP0135` 需要 ≥3.24 而系统是 3.22） |

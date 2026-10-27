@@ -58,3 +58,11 @@ class RPWDRoughPPORunnerCfg(RPWDFlatPPORunnerCfg):
     """崎岖地形任务的 PPO 配置 (超参沿用平地版, 只换日志目录名)."""
 
     experiment_name = "rp_wd_rough"
+
+
+@configclass
+class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
+    """Odin1 深度避障 PPO; 相机 rollout 采用较少并行环境控制显存."""
+
+    max_iterations = 5000
+    experiment_name = "rp_wd_odin_depth"

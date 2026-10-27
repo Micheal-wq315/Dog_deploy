@@ -26,11 +26,16 @@
 ./rl/scripts/train.sh --max_iterations 6000 --run_name v2
 ./rl/scripts/train.sh --resume                           # 从最新 checkpoint 续训
 ./rl/scripts/train.sh --resume --load_run 2026-10-11_11-35-05_rolling_v4 --checkpoint model_1500.pt
+
+# Odin1 深度避障 (默认 256 环境、5000 iter、headless)
+./rl/scripts/train_odin_depth.sh --run_name odin1_v1
 ```
 
 - 日志：`rl/logs/train_*.log`（训练 stdout）＋ `rl/logs/rsl_rl/<实验名>/<时间戳>_<run_name>/`（TensorBoard + checkpoint）
 - 训练期间**自动阻止系统休眠**（`systemd-inhibit`），夜间不会被冻死
 - 关键指标在 TensorBoard 里看 `Episode_Reward/*`（跟踪 vs 惩罚的配比）和 `Episode_Termination/*`
+- 深度相机使用离屏渲染；训练仍无 GUI，但比普通任务更占渲染资源
+- 腿部力矩惩罚约从第 3500 iter 开始，500 iter 渐增到 `-1e-5`
 
 ```bash
 tail -f rl/logs/train_rolling_*.log                      # 实时看迭代/回报
@@ -64,6 +69,9 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 ./rl/scripts/test_policy.sh --checkpoint rl/logs/.../model_1500.pt
 ./rl/scripts/test_policy.sh --train-dist --sweep         # 用带域随机化的训练配置测
 ./rl/scripts/test_policy.sh --export                     # 测试同时导出 ONNX
+
+# Odin1 深度策略 (训练完成后 GUI 回放并导出专属 ONNX)
+./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/<run>/model_4999.pt
 ```
 
 **看什么**：`线速误差` 越小越好；`滑移比` 接近 1.0 = 四轮纯滚动（≈0.2 = 在用轮子当脚蹦）；`终止` = 期间摔倒次数。
@@ -89,10 +97,10 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 
 **遥控键位**（先点一下 Isaac Sim 窗口获得焦点；按住生效，松开归零）：
 
-| 按键 | 动作 | | 按键 | 动作 |
-|---|---|---|---|---|
-| `W` / `S` | 前进 / 后退 | | `E` | 左转 |
-| `A` / `D` | 左移 / 右移 | | `Q` | 右转 |
+| 按键 | 动作 | 按键 | 动作 |
+|---|---|---|---|
+| `W` / `S` | 前进 / 后退 | `E` | 左转 |
+| `A` / `D` | 左移 / 右移 | `Q` | 右转 |
 
 （方向键 / 小键盘 8-2-4-6-7-9 同样可用；改键位去 `rl/scripts/keyboard_wasd.py`）
 
@@ -104,13 +112,32 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 ./rl/scripts/play.sh                                     # 回放 + 导出 + 自动校验
 ./rl/scripts/play.sh --no-export --num_envs 16           # 只回放不导出
 
-# 产物: rl/exported/policy_flat.onnx  (输入 obs[1,159] → 输出 actions[1,16], 权重已内嵌单文件)
+# 普通策略产物: rl/exported/policy_flat.onnx (输入 obs[1,168] → 输出 actions[1,16])
 cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_flat.onnx
 
 # 实机运行 (部署端)
 source /opt/ros/jazzy/setup.bash && source install/setup.bash
 ros2 launch roboparty_inference inference.launch.py robot:=wheel_quad policy:=default
 ```
+
+Odin1 深度策略的独立部署顺序：
+
+```bash
+# 终端 1：启动官方 Odin1 ROS2 驱动，并按设备说明开启深度流
+# 确认官方驱动 config/control_command.yaml 的 senddepth 已启用
+ros2 launch odin_ros_driver odin1_ros2.launch.py
+# 首次连接可检查深度消息 encoding (adapter 支持 16UC1 毫米或 32FC1 米)
+ros2 topic echo --once /odin1/depth_img_competetion --field encoding
+# 终端 2：深度图转换为策略使用的 12×16 特征
+ros2 launch roboparty_inference odin_depth_adapter.launch.py
+# 终端 3：加载 policy_odin_depth.onnx 与独立输入配置
+ros2 launch roboparty_inference inference.launch.py robot:=wheel_quad policy:=odin_depth
+```
+
+深度策略输入为原有 56 维观测 + 12 维归一化腿部力矩 + 192 维距离网格，帧栈 3，
+ONNX 为 780→16。训练深度增强包含 0.03 m 高斯噪声、1% 像素缺测和 80–100% 随机裁切；
+障碍地形混入 rough 课程。实机 adapter 读取 `/odin1/depth_img_competetion`，按 0.2–6 m
+裁剪并生成 12×16 最近距离特征。目前仿真相机安装位姿是估计值，需按真实支架校准后再做实机评估。
 
 实机手柄：`is_joy_control_` 默认开启，左摇杆 axes[4]/axes[3] → vx/vy，LT/RT → ωz，带 `clip_cmd` 限幅。
 

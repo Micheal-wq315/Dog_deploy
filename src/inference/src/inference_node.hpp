@@ -105,7 +105,7 @@ class InferenceNode : public rclcpp::Node {
         std::vector<std::string> output_names;        // 模型输出节点名列表
         std::vector<const char*> input_names_raw;     // 输入节点名 C 字符串 (ORT API 要求)
         std::vector<const char*> output_names_raw;    // 输出节点名 C 字符串
-        std::vector<int64_t> input_shape;             // 输入 shape (如 [1, 159])
+        std::vector<int64_t> input_shape;             // 输入 shape (默认 [1,168], OdinDepth [1,780])
         std::vector<int64_t> output_shape;            // 输出 shape (如 [1, 16])
         std::vector<float> input_buffer;              // 输入数据缓冲区 (帧栈展开后写入此)
         std::vector<float> output_buffer;             // 输出数据缓冲区 (推理结果读取此)
@@ -172,7 +172,7 @@ class InferenceNode : public rclcpp::Node {
             }
             // Motion policy support removed (not used by wheel_quad)
             // input_size = obs_num × frame_stack + extra_obs_num
-            // 如: 53 × 3 + 0 = 159 (wheel_quad)
+            // 如: 56 × 3 = 168 (普通 wheel_quad), OdinDepth 为 260 × 3 = 780
             setup_model(policy.ctx, policy.model_path,
                         policy.obs_num * policy.frame_stack + policy.extra_obs_num);
         }
@@ -316,6 +316,8 @@ class InferenceNode : public rclcpp::Node {
     float obs_scales_dof_pos_;                             // 关节位置观测缩放
     float obs_scales_dof_vel_;                             // 关节速度观测缩放
     float obs_scales_gravity_b_;                           // 重力方向观测缩放
+    float obs_scales_dof_torque_;                          // 力矩观测缩放 (Nm -> normalized)
+    float perception_timeout_s_;                           // 感知输入超时阈值
     float clip_observations_;                              // 观测截断阈值
     std::vector<double> action_scales_;                    // 每关节动作缩放 (USD 顺序, [joint_num])
     std::vector<long int> wheel_joint_indices_;            // 速度控制关节的 USD 索引 (轮子)
@@ -377,7 +379,9 @@ class InferenceNode : public rclcpp::Node {
     std::vector<float> cmd_vel_;                            // 速度指令 [vx, vy, ωz] (3 维)
     std::vector<float> cmd_posture_;                        // 机身姿态/高度指令 [pitch, roll, h] (3 维)
     std::vector<float> interrupt_action_;                   // 中断模式下外部发送的关节目标
-    std::vector<float> perception_obs_buffer_;              // 感知观测缓存 (高度图等)
+    std::vector<float> perception_obs_buffer_;              // 感知观测缓存 (深度网格等)
+    std::chrono::steady_clock::time_point perception_last_update_{};
+    bool perception_received_ = false;
     std::vector<float> joint_pos_buffer_;                   // 关节位置缓存 (从硬件读取)
     std::vector<float> joint_vel_buffer_;                   // 关节速度缓存
     std::vector<float> joint_torques_buffer_;               // 关节力矩缓存
@@ -466,6 +470,8 @@ class InferenceNode : public rclcpp::Node {
     void get_gravity_b_obs(std::vector<float>& segment);    // 重力方向 "gravity_b":3
     void get_dof_pos_obs(std::vector<float>& segment);      // 关节位置 "dof_pos":23
     void get_dof_vel_obs(std::vector<float>& segment);      // 关节速度 "dof_vel":23
+    void get_dof_torque_obs(std::vector<float>& segment);   // 腿关节力矩 "leg_torque":12
+    void get_perception_obs(std::vector<float>& segment);   // 深度网格 "perception":192
     void get_last_action_obs(std::vector<float>& segment);  // 上一帧动作 "last_action":23
     void get_interrupt_obs(std::vector<float>& segment);    // 中断标志 "interrupt":1
 
