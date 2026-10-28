@@ -14,6 +14,11 @@ from isaaclab.envs.mdp import joint_pos_rel as _joint_pos_rel
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import TiledCamera
 
+from rp_wd_rl.assets.rp_wd_contract import (
+    ODIN_DEPTH_MEMORY_FRAMES,
+    ODIN_DEPTH_ROTATION_K,
+)
+
 from .events import GYRO_BIAS_ATTR, JOINT_OFFSET_ATTR
 
 
@@ -32,20 +37,22 @@ def leg_torque_normalized(
 def odin_depth_grid(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("odin_depth_camera"),
-    data_type: str = "distance_to_camera",
+    data_type: str = "distance_to_image_plane",
     max_depth: float = 6.0,
-    grid_size: tuple[int, int] = (12, 16),  # (height, width)
+    grid_size: tuple[int, int] = (16, 12),  # (height, width), portrait after rotation
+    rotation_k: int = ODIN_DEPTH_ROTATION_K,
     noise_std: float = 0.03,
     dropout_prob: float = 0.01,
     crop_fraction_range: tuple[float, float] = (0.80, 1.0),
     random_crop: bool = True,
     augmentation_warmup_steps: int = 12_000,
-    augmentation_ramp_steps: int = 60_000,
+    augmentation_ramp_steps: int = 48_000,
 ) -> torch.Tensor:
     """Odin1 风格深度观测: 随机裁切、深度噪声/缺测，再做最近障碍保留型池化.
 
-    返回 [num_envs, H*W] 的 0..1 距离网格。无回波编码为 max_depth；网格池化
-    取每格最近有效点，避免平均池化把细障碍抹掉。部署端 odin_depth_adapter
+    返回 [num_envs, H, W] 的 0..1 距离网格。先按传感器校正角度旋转，再裁切和池化；
+    无回波编码为 max_depth。网格池化取每格最近有效点，避免平均池化把细障碍抹掉。
+    部署端 odin_depth_adapter
     使用同样的分格最小值和 max_depth 归一化。传感器增强从无增强开始，按训练步数
     线性渐入目标噪声、缺测率和裁切范围，让策略先学几何避障再适应传感器误差。
     """
@@ -56,6 +63,8 @@ def odin_depth_grid(
     if depth.ndim == 4:
         depth = depth[..., 0]
     depth = depth.to(dtype=torch.float32).clone()
+    if rotation_k % 4:
+        depth = torch.rot90(depth, k=rotation_k % 4, dims=(-2, -1))
     valid = torch.isfinite(depth) & (depth > 0.0)
     depth = torch.where(valid, depth, torch.full_like(depth, max_depth))
     depth.clamp_(min=0.2, max=max_depth)
@@ -98,7 +107,66 @@ def odin_depth_grid(
     if effective_noise > 0.0:
         grid = grid + torch.randn_like(grid) * effective_noise
     grid = (grid / max_depth).clamp_(0.0, 1.0)
-    return grid.flatten(start_dim=1)
+    return grid
+
+
+def odin_depth_memory(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("odin_depth_camera"),
+    data_type: str = "distance_to_image_plane",
+    max_depth: float = 6.0,
+    grid_size: tuple[int, int] = (16, 12),
+    noise_std: float = 0.03,
+    dropout_prob: float = 0.01,
+    crop_fraction_range: tuple[float, float] = (0.80, 1.0),
+    random_crop: bool = True,
+    augmentation_warmup_steps: int = 12_000,
+    augmentation_ramp_steps: int = 48_000,
+    memory_frames: int = ODIN_DEPTH_MEMORY_FRAMES,
+    rotation_k: int = ODIN_DEPTH_ROTATION_K,
+) -> torch.Tensor:
+    """输出按相机新帧更新的时间记忆，形状为 [N, frames, H, W].
+
+    深度相机约15Hz而策略为50Hz；以 camera.frame 检测新图，只在新图到达时推进
+    历史窗口。每回合首帧用当前图复制填满，和部署端适配器初始化规则一致。
+    """
+    if memory_frames < 1:
+        raise ValueError("memory_frames 必须大于0")
+    sensor: TiledCamera = env.scene.sensors[sensor_cfg.name]
+    current = odin_depth_grid(
+        env,
+        sensor_cfg=sensor_cfg,
+        data_type=data_type,
+        max_depth=max_depth,
+        grid_size=grid_size,
+        rotation_k=rotation_k,
+        noise_std=noise_std,
+        dropout_prob=dropout_prob,
+        crop_fraction_range=crop_fraction_range,
+        random_crop=random_crop,
+        augmentation_warmup_steps=augmentation_warmup_steps,
+        augmentation_ramp_steps=augmentation_ramp_steps,
+    )
+    frame_id = sensor.frame.to(device=current.device, dtype=torch.long)
+    memory_attr = "_rpwd_odin_depth_memory"
+    frame_attr = "_rpwd_odin_depth_frame_id"
+    reset_mask = env.episode_length_buf == 0
+
+    memory = getattr(env, memory_attr, None)
+    previous_frame_id = getattr(env, frame_attr, None)
+    if memory is None or memory.shape != (env.num_envs, memory_frames, *grid_size):
+        memory = current.unsqueeze(1).expand(-1, memory_frames, -1, -1).clone()
+    else:
+        new_frame = frame_id != previous_frame_id
+        advance = new_frame & ~reset_mask
+        shifted = torch.cat((memory[:, 1:], current.unsqueeze(1)), dim=1)
+        memory = torch.where(advance[:, None, None, None], shifted, memory)
+        reset_history = current.unsqueeze(1).expand(-1, memory_frames, -1, -1)
+        memory = torch.where(reset_mask[:, None, None, None], reset_history, memory)
+
+    setattr(env, memory_attr, memory)
+    setattr(env, frame_attr, frame_id.clone())
+    return memory
 
 
 def base_ang_vel_biased(

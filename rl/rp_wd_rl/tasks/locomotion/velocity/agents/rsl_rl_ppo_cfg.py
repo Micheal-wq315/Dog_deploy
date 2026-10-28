@@ -2,6 +2,7 @@
 
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import (
+    RslRlCNNModelCfg,
     RslRlOnPolicyRunnerCfg,
     RslRlPpoActorCriticCfg,
     RslRlPpoAlgorithmCfg,
@@ -62,7 +63,64 @@ class RPWDRoughPPORunnerCfg(RPWDFlatPPORunnerCfg):
 
 @configclass
 class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
-    """Odin1 深度避障 PPO; 相机 rollout 采用较少并行环境控制显存."""
+    """Odin1 深度避障 PPO: CNN 编码8帧深度记忆，MLP融合本体观测."""
 
     max_iterations = 8000
-    experiment_name = "rp_wd_odin_depth"
+    # 另开日志空间，避免误从旧780维 MLP checkpoint 续训。
+    experiment_name = "rp_wd_odin_depth_memory"
+
+    # policy 仍是 56维基础观测 + 12维力矩观测，每项按部署契约堆叠3帧。
+    # CNN 对独立深度组 [B,8,16,12] 编码，空间维先保留到第二层再池化。
+    actor = RslRlCNNModelCfg(
+        hidden_dims=[256, 128],
+        activation="elu",
+        obs_normalization=False,
+        distribution_cfg=RslRlCNNModelCfg.GaussianDistributionCfg(init_std=0.7),
+        cnn_cfg=RslRlCNNModelCfg.CNNCfg(
+            output_channels=[16, 32],
+            kernel_size=[3, 3],
+            stride=[1, 1],
+            padding="zeros",
+            norm="none",
+            activation="elu",
+            max_pool=[False, True],
+            global_pool="none",
+            flatten=True,
+        ),
+    )
+    critic = RslRlCNNModelCfg(
+        hidden_dims=[256, 128],
+        activation="elu",
+        obs_normalization=False,
+        distribution_cfg=None,
+        cnn_cfg=RslRlCNNModelCfg.CNNCfg(
+            output_channels=[16, 32],
+            kernel_size=[3, 3],
+            stride=[1, 1],
+            padding="zeros",
+            norm="none",
+            activation="elu",
+            max_pool=[False, True],
+            global_pool="none",
+            flatten=True,
+        ),
+    )
+    obs_groups = {
+        "actor": ["policy", "depth_memory"],
+        "critic": ["policy", "depth_memory"],
+    }
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.005,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=1.0e-3,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+        share_cnn_encoders=False,
+    )

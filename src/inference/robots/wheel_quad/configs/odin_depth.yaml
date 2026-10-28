@@ -1,10 +1,12 @@
 # Odin1 深度避障策略 profile.
-# 训练 ONNX 输入: 260 单帧维度 × 3 帧 = 780; 输出仍为 16 维动作.
+# 训练 ONNX 输入: 本体/力矩 68×3 + 深度记忆 8×16×12 = 1740; 输出仍为 16 维动作.
 inference_node:
     ros__parameters:
         model_names: ["policy_odin_depth.onnx"]
         obs_layouts:
-          - "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:12, dof_vel:16, last_action:16, cmd_posture:3, leg_torque:12, perception:192"
+          - "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:12, dof_vel:16, last_action:16, cmd_posture:3, leg_torque:12"
+        extra_obs_layouts:
+          - "perception:1536"
         frame_stacks: [3]
         obs_stack_orders: ["obs_major"]
         act_alpha: 0.9

@@ -39,7 +39,9 @@
 - 深度相机使用离屏渲染；训练仍无 GUI，但比普通任务更占渲染资源
 - 新课程：约 200–3400 轮扩展速度、3000–5700 轮加入姿态/高度目标、4000–6000 轮渐入推扰
 - 地形最高等级按 0/2000/4000/6000/7000 轮解锁为 1/2/4/6/8；升级依赖实际行进表现，重点先学低台阶再逐步增加高度
-- 已移除所有电机力矩惩罚；12维腿部力矩观测仍保留，780维输入和16维动作接口不变
+- 已移除所有电机力矩惩罚；12维腿部力矩观测仍保留
+- OdinDepth 当前输入契约为1740→16（68×3本体/力矩 + 8×16×12深度记忆）；旧780维 checkpoint 不兼容，需新模型
+- 深度原图默认逆时针旋转90°，adapter维护8帧历史；实物方向相反时启动adapter时设 `rotation_deg:=270`
 - 高度奖励与低高度终止改用机身正下方地面射线，按实际地面评估站姿净空
 - `--max_iterations` 表示包含已完成轮数的总目标；续训恢复课程步数，从 checkpoint 下一轮开始
 
@@ -77,33 +79,33 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 ./rl/scripts/test_policy.sh --export                     # 测试同时导出 ONNX
 
 # Odin1 深度策略 (训练完成后 GUI 回放并导出专属 ONNX)
-./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/<run>/model_7999.pt
+./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_7999.pt
 
 # Odin1 深度模型量化测试：9组范围内指令，保存CSV、JSON、PNG和SVG
 # 每次指定新的保存目录，已有 samples.csv 时会拒绝覆盖
 ./rl/scripts/gui_test.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \
-  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/2026-10-28_12-21-00_odin1_curriculum8k/model_7999.pt \
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_7999.pt \
   --terrain-level 0 --eval-reset --seed 42 --num_envs 12 --sweep \
   --settle_steps 50 --measure_steps 200 --headless \
   --save-dir rl/logs/evaluation/odin_test_level0
 # 去掉 --headless 可打开GUI；--terrain-level 2 可测试更高难度
 
-# 保存 Odin 深度原图、12×16策略网格及PNG预览（每25步，约0.5秒一帧）
+# 保存 Odin 原图、90°校正图、16×12策略网格及PNG预览（每25步，约0.5秒一帧）
 ./rl/scripts/gui_test.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \\
-  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/<run>/model_7999.pt \\
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_7999.pt \\
   --cmd 0.3 0 0 --save-dir rl/logs/evaluation/odin_depth_check --save-depth
 
 # 保存完整训练数据与训练曲线：不启动仿真，可在训练期间使用
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate isaaclab
 python rl/scripts/plot_training.py \
-  --run rl/logs/rsl_rl/rp_wd_odin_depth/2026-10-28_12-21-00_odin1_curriculum8k \
+  --run rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run> \
   --output-dir rl/logs/evaluation/odin_training
 ```
 
 **测试数据**：`samples.csv` 保存每环境、每策略步的状态和终止原因；`summary.csv/json`
 只汇总测量阶段，`terrain_summary.json` 按地形类型汇总。`--save-depth` 会生成 `depth_frames/`
-（原始深度 `.npy`、12×16米制网格、归一化网格及PNG并排预览）；CSV含脚下地面高度及机身净空。
+（原始深度、旋转校正图、16×12米制网格、归一化网格及PNG预览）；CSV含脚下地面高度及机身净空。
 `test_curves.png/svg` 为测试图，
 `training_curves.png/svg` 为训练图。固定等级会启用按难度行生成地形，并将所有环境放到指定行；
 它是混合地形速度测试，不代表某一台阶高度的通过率。测试中的非超时终止与正常超时分别计数。
@@ -162,16 +164,16 @@ Odin1 深度策略的独立部署顺序：
 ros2 launch odin_ros_driver odin1_ros2.launch.py
 # 首次连接可检查深度消息 encoding (adapter 支持 16UC1 毫米或 32FC1 米)
 ros2 topic echo --once /odin1/depth_img_competetion --field encoding
-# 终端 2：深度图转换为策略使用的 12×16 特征
-ros2 launch roboparty_inference odin_depth_adapter.launch.py
+# 终端 2：旋转90°、生成16×12网格并维护8帧深度记忆（朝向相反时传 rotation_deg:=270）
+ros2 launch roboparty_inference odin_depth_adapter.launch.py rotation_deg:=90
 # 终端 3：加载 policy_odin_depth.onnx 与独立输入配置
 ros2 launch roboparty_inference inference.launch.py robot:=wheel_quad policy:=odin_depth
 ```
 
-深度策略输入为原有 56 维观测 + 12 维归一化腿部力矩 + 192 维距离网格，帧栈 3，
-ONNX 为 780→16。训练深度增强包含 0.03 m 高斯噪声、1% 像素缺测和 80–100% 随机裁切；
-障碍地形混入 rough 课程。实机 adapter 读取 `/odin1/depth_img_competetion`，按 0.2–6 m
-裁剪并生成 12×16 最近距离特征。目前仿真相机安装位姿是估计值，需按真实支架校准后再做实机评估。
+深度策略输入为原有56维观测 + 12维归一化腿部力矩（共68维，堆叠3帧）+ 8×16×12深度记忆，
+ONNX 为1740→16。训练侧对深度加入0.03m高斯噪声、1%像素缺测和80–100%随机裁切；仿真与adapter
+都将160×120原图逆时针旋转90°，再按0.2–6m裁剪并生成16行×12列最近距离特征。实物朝向相反时将
+`rotation_deg`设为270。上机前用 `--save-depth` 检查原图/校正图/网格，并校准相机安装位姿。
 
 实机手柄：`is_joy_control_` 默认开启，左摇杆 axes[4]/axes[3] → vx/vy，LT/RT → ωz，带 `clip_cmd` 限幅。
 

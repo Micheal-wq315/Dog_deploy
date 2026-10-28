@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import os
 
+import torch
+from torch import nn
+
 from rp_wd_rl.assets.rp_wd_contract import ONNX_INPUT_DIM
 
-# 部署端契约: 输入 = 单帧观测 53 × 帧栈 3; 输出 = 16 个关节
+# 普通策略部署端契约: 输入 = 单帧观测 56 × 帧栈 3; 输出 = 16 个关节
 EXPECTED_INPUT_DIM = ONNX_INPUT_DIM
 EXPECTED_OUTPUT_DIM = 16
 
@@ -70,6 +73,36 @@ def verify_onnx(path: str, expected_input_dim: int = EXPECTED_INPUT_DIM) -> bool
     return ok
 
 
+class _FlatCNNPolicy(nn.Module):
+    """Wrap RSL-RL's split proprioception/image ONNX model as one flat input."""
+
+    def __init__(self, model, main_dim: int, channels: int, height: int, width: int):
+        super().__init__()
+        self.model = model
+        self.main_dim = main_dim
+        self.channels = channels
+        self.height = height
+        self.width = width
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        proprioception = obs[:, : self.main_dim]
+        depth = obs[:, self.main_dim :].reshape(
+            obs.shape[0], self.channels, self.height, self.width
+        )
+        return self.model(proprioception, depth)
+
+
+def expected_runner_input_dim(runner) -> int:
+    """Return flattened deployed input size for MLP or CNN RSL-RL policies."""
+    actor = runner.alg.get_policy()
+    if hasattr(actor, "obs_dims_2d"):
+        if len(actor.obs_dims_2d) != 1:
+            raise ValueError("部署端单深度输入只支持一个 CNN 观测组")
+        height, width = actor.obs_dims_2d[0]
+        return int(actor.obs_dim + actor.obs_channels_2d[0] * height * width)
+    return int(actor.obs_dim)
+
+
 def export_and_verify(
     runner,
     export_dir: str,
@@ -78,8 +111,29 @@ def export_and_verify(
 ) -> str:
     """导出单文件 ONNX 并按当前策略的 I/O 契约校验; 返回文件路径."""
     os.makedirs(export_dir, exist_ok=True)
-    runner.export_policy_to_onnx(path=export_dir, filename="policy.onnx")
-    src = os.path.join(export_dir, "policy.onnx")
+    actor = runner.alg.get_policy()
+    src = os.path.join(export_dir, "policy_raw.onnx")
+    if hasattr(actor, "obs_dims_2d"):
+        if len(actor.obs_dims_2d) != 1:
+            raise ValueError("部署端单输入 ONNX 只支持一个 CNN 深度观测组")
+        onnx_model = actor.as_onnx(verbose=False).to("cpu").eval()
+        height, width = onnx_model.obs_dims_2d[0]
+        channels = onnx_model.obs_channels_2d[0]
+        flat_model = _FlatCNNPolicy(
+            onnx_model, onnx_model.obs_dim_1d, channels, height, width
+        ).eval()
+        flat_example = torch.zeros(1, expected_runner_input_dim(runner), dtype=torch.float32)
+        torch.onnx.export(
+            flat_model,
+            flat_example,
+            src,
+            export_params=True,
+            opset_version=18,
+            input_names=["obs"],
+            output_names=["actions"],
+        )
+    else:
+        runner.export_policy_to_onnx(path=export_dir, filename=os.path.basename(src))
     dst = os.path.join(export_dir, output_filename)
     consolidate_onnx(src, dst)
     # 清掉带外部权重的中间文件, 避免误拷
@@ -87,5 +141,11 @@ def export_and_verify(
         if os.path.exists(stale):
             os.remove(stale)
     print(f"[INFO] 已导出(单文件): {dst}  ({os.path.getsize(dst) / 1024:.0f} KB)")
-    verify_onnx(dst, expected_input_dim=expected_input_dim)
+    expected = (
+        expected_runner_input_dim(runner)
+        if hasattr(actor, "obs_dims_2d")
+        else expected_input_dim
+    )
+    if not verify_onnx(dst, expected_input_dim=expected):
+        raise RuntimeError(f"ONNX 契约验证失败: {dst}")
     return dst

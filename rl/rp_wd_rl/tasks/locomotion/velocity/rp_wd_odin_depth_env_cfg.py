@@ -14,7 +14,11 @@ from isaaclab.sensors import TiledCameraCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from rp_wd_rl.assets.rp_wd_contract import ODIN_DEPTH_IMAGE_SIZE
+from rp_wd_rl.assets.rp_wd_contract import (
+    ODIN_DEPTH_GRID_SIZE,
+    ODIN_DEPTH_IMAGE_SIZE,
+    ODIN_DEPTH_MEMORY_FRAMES,
+)
 
 from . import mdp
 from .rp_wd_env_cfg import ObservationsCfg
@@ -89,7 +93,8 @@ class RPWDOdinDepthSceneCfg(RPWDRoughSceneCfg):
             rot=(0.6428, 0.0, 0.7660, 0.0),
             convention="ros",
         ),
-        data_types=["distance_to_camera"],
+        # ROS 深度图通常是沿光轴的Z深度；用 distance_to_image_plane 对齐其语义。
+        data_types=["distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=6.0,
             horizontal_aperture=20.8,
@@ -118,24 +123,36 @@ class RPWDOdinDepthObservationsCfg(ObservationsCfg):
             },
             noise=Unoise(n_min=-0.05, n_max=0.05),
         )
-        # 每帧 12×16 = 192 个距离特征; 历史长度由父类设为 3 帧。
-        perception = ObsTerm(
-            func=mdp.odin_depth_grid,
+
+    @configclass
+    class DepthMemoryCfg(ObsGroup):
+        """独立相机历史组，保持 [B, C=8, H=16, W=12] 供 CNN 编码。"""
+
+        depth_memory = ObsTerm(
+            func=mdp.odin_depth_memory,
             params={
                 "sensor_cfg": SceneEntityCfg("odin_depth_camera"),
-                "data_type": "distance_to_camera",
+                "data_type": "distance_to_image_plane",
                 "max_depth": 6.0,
-                "grid_size": (12, 16),
+                "grid_size": (ODIN_DEPTH_GRID_SIZE[1], ODIN_DEPTH_GRID_SIZE[0]),
                 "noise_std": 0.03,
                 "dropout_prob": 0.01,
                 "crop_fraction_range": (0.80, 1.0),
                 "random_crop": True,
-                "augmentation_warmup_steps": 12_000,  # 500 iter 后渐入
-                "augmentation_ramp_steps": 48_000,    # 2500 iter 达到完整增强
+                "augmentation_warmup_steps": 12_000,
+                "augmentation_ramp_steps": 48_000,
+                "memory_frames": ODIN_DEPTH_MEMORY_FRAMES,
             },
         )
 
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.history_length = 0
+            self.flatten_history_dim = False
+            self.concatenate_terms = True
+
     policy: ObsGroup = PolicyCfg()
+    depth_memory: ObsGroup = DepthMemoryCfg()
 
 
 @configclass
@@ -185,7 +202,7 @@ class RPWDOdinDepthEnvCfg_PLAY(RPWDOdinDepthEnvCfg):
         super().__post_init__()
         self.scene.num_envs = 8
         self.observations.policy.enable_corruption = False
-        self.observations.policy.perception.params.update(
+        self.observations.depth_memory.depth_memory.params.update(
             {
                 "noise_std": 0.0,
                 "dropout_prob": 0.0,

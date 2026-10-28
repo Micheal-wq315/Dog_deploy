@@ -11,6 +11,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from rp_wd_rl.assets.rp_wd_contract import (
+    ODIN_DEPTH_GRID_SIZE,
+    ODIN_DEPTH_ROTATION_K,
+)
 from rp_wd_rl.tasks.locomotion.velocity.mdp.terrain import terrain_height_under_root
 
 
@@ -115,25 +119,34 @@ class EvaluationRecorder:
             self._save_depth_preview(env)
 
     def _save_depth_preview(self, env):
-        """保存传感器原图及与策略相同网格尺寸的最近距离预览。"""
+        """保存原图、旋转校正图及策略使用的深度网格。"""
         camera = env.scene.sensors.get("odin_depth_camera")
         if camera is None:
             raise RuntimeError("请求保存深度数据，但场景中没有 odin_depth_camera 传感器。")
-        depth = camera.data.output["distance_to_camera"]
+        depth = camera.data.output["distance_to_image_plane"]
         if depth.ndim == 4:
             depth = depth[..., 0]
         raw = depth[0].detach().float().cpu().numpy()
         valid = np.isfinite(raw) & (raw > 0.0)
         clipped = np.where(valid, np.clip(raw, 0.2, 6.0), 6.0).astype(np.float32)
-        grid_m = -F.adaptive_max_pool2d(-torch.from_numpy(clipped)[None, None], (12, 16))[0, 0].numpy()
+        corrected = np.rot90(clipped, k=ODIN_DEPTH_ROTATION_K).copy()
+        grid_h, grid_w = ODIN_DEPTH_GRID_SIZE[1], ODIN_DEPTH_GRID_SIZE[0]
+        grid_m = -F.adaptive_max_pool2d(
+            -torch.from_numpy(corrected)[None, None], (grid_h, grid_w)
+        )[0, 0].numpy()
         grid_norm = np.clip(grid_m / 6.0, 0.0, 1.0)
         stem = f"depth_{self.step:06d}"
         np.save(self.directory / "depth_frames" / f"{stem}.npy", raw)
-        np.save(self.directory / "depth_frames" / f"{stem}_grid12x16_m.npy", grid_m)
-        np.save(self.directory / "depth_frames" / f"{stem}_grid12x16_norm.npy", grid_norm)
+        np.save(self.directory / "depth_frames" / f"{stem}_rot90_ccw.npy", corrected)
+        np.save(self.directory / "depth_frames" / f"{stem}_grid16x12_m.npy", grid_m)
+        np.save(self.directory / "depth_frames" / f"{stem}_grid16x12_norm.npy", grid_norm)
         plt = setup_plotting()
-        fig, axes = plt.subplots(1, 2, figsize=(10, 4), layout="constrained")
-        for ax, image, title in ((axes[0], clipped, "Odin深度原图（米）"), (axes[1], grid_m, "策略前处理网格（12×16，米）")):
+        fig, axes = plt.subplots(1, 3, figsize=(12, 4), layout="constrained")
+        for ax, image, title in (
+            (axes[0], clipped, "传感器原图（米）"),
+            (axes[1], corrected, "旋转90°后的深度图（米）"),
+            (axes[2], grid_m, "策略网格（16×12，米）"),
+        ):
             plot = ax.imshow(image, cmap="turbo", vmin=0.2, vmax=6.0, interpolation="nearest")
             ax.set_title(title)
             ax.set_axis_off()

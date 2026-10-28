@@ -29,7 +29,7 @@ parser = argparse.ArgumentParser(description="Test the latest RP_wd policy.")
 parser.add_argument("--task", type=str, default=None, help="显式指定任务；深度模型使用 OdinDepth-Play 任务。")
 parser.add_argument("--seed", type=int, default=42, help="测试随机种子。")
 parser.add_argument("--save-dir", type=str, default=None, help="保存逐环境 CSV、汇总、测试图和配置。")
-parser.add_argument("--save-depth", action="store_true", help="每0.5秒保存一张原始深度图及12×16网格预览；需要 --save-dir。")
+parser.add_argument("--save-depth", action="store_true", help="每0.5秒保存原始图、旋转校正图及16×12网格；需要 --save-dir。")
 parser.add_argument("--eval-reset", action="store_true", help="固定出生朝向、零初速度，便于重复测试。")
 parser.add_argument(
     "--cmd", type=float, nargs=3, default=None, metavar=("VX", "VY", "WZ"),

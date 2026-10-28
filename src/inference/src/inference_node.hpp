@@ -105,7 +105,7 @@ class InferenceNode : public rclcpp::Node {
         std::vector<std::string> output_names;        // 模型输出节点名列表
         std::vector<const char*> input_names_raw;     // 输入节点名 C 字符串 (ORT API 要求)
         std::vector<const char*> output_names_raw;    // 输出节点名 C 字符串
-        std::vector<int64_t> input_shape;             // 输入 shape (默认 [1,168], OdinDepth [1,780])
+        std::vector<int64_t> input_shape;             // 输入 shape (普通 [1,168], OdinDepth [1,1740])
         std::vector<int64_t> output_shape;            // 输出 shape (如 [1, 16])
         std::vector<float> input_buffer;              // 输入数据缓冲区 (帧栈展开后写入此)
         std::vector<float> output_buffer;             // 输出数据缓冲区 (推理结果读取此)
@@ -172,7 +172,7 @@ class InferenceNode : public rclcpp::Node {
             }
             // Motion policy support removed (not used by wheel_quad)
             // input_size = obs_num × frame_stack + extra_obs_num
-            // 如: 56 × 3 = 168 (普通 wheel_quad), OdinDepth 为 260 × 3 = 780
+            // 如: 56 × 3 = 168 (普通 wheel_quad), OdinDepth 为 68 × 3 + 1536 = 1740
             setup_model(policy.ctx, policy.model_path,
                         policy.obs_num * policy.frame_stack + policy.extra_obs_num);
         }

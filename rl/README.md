@@ -60,7 +60,7 @@ export ISAACLAB_PATH=/media/rmer/data/IsaacLab
 ./rl/scripts/play.sh
 ./rl/scripts/play.sh --headless --video --video_length 300   # 无显示器: 录视频
 # 普通策略: policy_flat.onnx (168 → 16); 深度策略使用 --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0
-# 深度 checkpoint 用 --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 回放并导出 780 → 16 的模型
+# 深度策略用 --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 回放并导出 1740 → 16 的模型
 
 # 3) 部署 (单文件, 直接覆盖即可)
 cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_flat.onnx
@@ -111,19 +111,22 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 
 | 项目 | 配置 |
 |---|---|
-| ONNX | `policy_odin_depth.onnx`，输入 780 (=260×3)，输出仍为 16 |
-| 单帧新增观测 | 腿部力矩 12 维 (仿真/实机均按 42 N·m 归一化)；深度 12×16=192 维 |
-| 深度增强 | 0.03 m 高斯噪声、1% 随机缺测、80–100% 随机裁切/缩放，特征采用每格最近距离并归一化到 0..1 |
+| ONNX | `policy_odin_depth.onnx`，输入 1740 (=68×3 + 8×16×12)，输出仍为 16 |
+| 本体观测 | 腿部力矩 12 维（仿真/实机均按 42 N·m 归一化），随其余 56 维观测堆叠3帧 |
+| 深度记忆 | 相机新帧到达时更新8帧历史（约0.47秒，旧→新），CNN输入为 `[8,16,12]` |
+| 图像方向/网格 | 原始160×120横图先逆时针旋转90°，生成16行×12列竖向最近距离网格，特征归一化到0..1 |
+| 深度增强 | 0.03 m 高斯噪声、1% 随机缺测、80–100% 随机裁切/缩放；相机新帧才进入记忆 |
+| 深度语义 | 仿真使用 `distance_to_image_plane`（光轴Z深度），与ROS深度图的米制/毫米制值对齐；驱动语义仍需实测确认 |
 | 仿真相机 | 前向 160×120、约 120°×90°、0.2–6 m；安装位姿是待实测标定的初始估值 |
 | 障碍课程 | 继承轮足 rough 地形、摩擦/质量/质心/执行器/关节/IMU/推力随机化，并增加箱体障碍 |
-| 力矩惩罚课程 | 第 5600–6800 iter 渐增到 `dof_torques_l2=-1e-5` |
+| 力矩处理 | 无电机力矩惩罚；12维腿部力矩只作为策略观测 |
 | 任务 ID | `Isaac-Velocity-Rough-RPWD-OdinDepth-v0` / `...-OdinDepth-Play-v0` |
 | ROS2 部署 | Odin1 官方深度图 → `odin_depth_adapter.launch.py` → `/odin1/depth_features` → `policy:=odin_depth` |
 
 一键 headless 训练：`./rl/scripts/train_odin_depth.sh --run_name odin1_v1`。
 用 `./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint <path>`
-做仿真回放并导出专属 ONNX。当前策略消费三帧深度网格历史；
-Odin1 空间记忆功能本身尚未作为单独输入接入。
+做仿真回放并导出专属 ONNX。策略使用独立 CNN 编码8帧深度记忆；
+导出时会把本体观测和深度历史展平成部署端单输入 ONNX。
 
 完整的 8000 轮分阶段课程、地形上限和续训规则见 [CURRICULUM.md](CURRICULUM.md)。
 

@@ -5,7 +5,7 @@
 
 校验两类内容:
   A. 静态契约 (毫秒级, 读 YAML/URDF 对比训练侧常量)
-     - 既有策略 56×3=168, Odin1 深度策略 260×3=780
+     - 既有策略 56×3=168, Odin1 深度策略 68×3 + 8×16×12 = 1740
      - 动作缩放 / 轮子索引 / USD↔URDF 关节顺序映射 / 默认姿态
      - 控制周期 dt × decimation
   B. 运行时语义 (需要启动仿真, 约 1 分钟)
@@ -71,8 +71,12 @@ from rp_wd_rl.assets.rp_wd_contract import (  # noqa: E402
     ONNX_OUTPUT_DIM,
     ODIN_DEPTH_DEPLOY_CONFIG_PATH,
     ODIN_DEPTH_FEATURE_DIM,
+    ODIN_DEPTH_GRID_SIZE,
+    ODIN_DEPTH_MEMORY_FEATURE_DIM,
+    ODIN_DEPTH_MEMORY_FRAMES,
     ODIN_DEPTH_OBS_LAYOUT,
     ODIN_DEPTH_ONNX_INPUT_DIM,
+    ODIN_DEPTH_ROTATION_DEG,
     LEG_TORQUE_SCALE,
     RP_WD_URDF_PATH,
     SIM_DT,
@@ -185,6 +189,9 @@ with open(ODIN_DEPTH_DEPLOY_CONFIG_PATH, "r", encoding="utf-8") as f:
 depth_layout = [part.strip() for part in depth_deploy["obs_layouts"][0].split(",")]
 depth_names = [part.split(":")[0] for part in depth_layout]
 depth_dims = [int(part.split(":")[1]) for part in depth_layout]
+extra_layout = [part.strip() for part in depth_deploy["extra_obs_layouts"][0].split(",")]
+extra_names = [part.split(":")[0] for part in extra_layout]
+extra_dims = [int(part.split(":")[1]) for part in extra_layout]
 check(
     "Odin1 观测分量顺序",
     depth_names == [name for name, _ in ODIN_DEPTH_OBS_LAYOUT],
@@ -196,15 +203,20 @@ check(
     f"{depth_dims}",
 )
 check(
-    "Odin1 ONNX 输入 780 = 260×3",
-    sum(depth_dims) * int(depth_deploy["frame_stacks"][0]) == ODIN_DEPTH_ONNX_INPUT_DIM,
-    f"{sum(depth_dims)}×{depth_deploy['frame_stacks'][0]}",
+    "Odin1 ONNX 输入 = 本体/力矩帧栈 + 深度历史",
+    sum(depth_dims) * int(depth_deploy["frame_stacks"][0]) + sum(extra_dims)
+    == ODIN_DEPTH_ONNX_INPUT_DIM,
+    f"{sum(depth_dims)}×{depth_deploy['frame_stacks'][0]} + {sum(extra_dims)}",
 )
 check(
-    "Odin1 感知输入维度与 12×16 网格一致",
-    depth_dims[depth_names.index("perception")] == ODIN_DEPTH_FEATURE_DIM,
-    f"perception:{depth_dims[depth_names.index('perception')]}",
+    "Odin1 extra perception 与 8帧×16×12 网格一致",
+    extra_names == ["perception"]
+    and extra_dims == [ODIN_DEPTH_MEMORY_FEATURE_DIM]
+    and ODIN_DEPTH_MEMORY_FEATURE_DIM == ODIN_DEPTH_MEMORY_FRAMES * ODIN_DEPTH_FEATURE_DIM,
+    f"{extra_names}:{extra_dims}",
 )
+check("深度旋转角度为90°", ODIN_DEPTH_ROTATION_DEG == 90, f"{ODIN_DEPTH_ROTATION_DEG}° CCW")
+check("校正后深度网格为16×12", ODIN_DEPTH_GRID_SIZE == (12, 16), f"宽×高={ODIN_DEPTH_GRID_SIZE}")
 check(
     "腿部力矩归一化缩放",
     abs(float(depth_deploy["obs_scales_dof_torque"]) - LEG_TORQUE_SCALE) < 1.0e-8,
@@ -258,9 +270,18 @@ if not args_cli.no_sim:
 
     # B2. 维度
     check(
-        "观测向量维度 = 契约 ONNX 输入",
-        obs["policy"].shape[-1] == ODIN_DEPTH_ONNX_INPUT_DIM,
-        f"{tuple(obs['policy'].shape)} (期望 {ODIN_DEPTH_ONNX_INPUT_DIM})",
+        "本体/力矩组维度 = 68×3",
+        obs["policy"].shape[-1] == sum(dim for _, dim in ODIN_DEPTH_OBS_LAYOUT) * frame_stack,
+        f"{tuple(obs['policy'].shape)}",
+    )
+    memory_shape = tuple(obs["depth_memory"].shape)
+    expected_memory_shape = (env.num_envs, ODIN_DEPTH_MEMORY_FRAMES, ODIN_DEPTH_GRID_SIZE[1], ODIN_DEPTH_GRID_SIZE[0])
+    check("深度历史组形状 = [N,8,16,12]", memory_shape == expected_memory_shape, f"{memory_shape}")
+    check(
+        "拆分观测拼接后等于 ONNX 输入维度",
+        obs["policy"].shape[-1] + obs["depth_memory"].numel() // env.num_envs
+        == ODIN_DEPTH_ONNX_INPUT_DIM,
+        f"{obs['policy'].shape[-1]} + {obs['depth_memory'].numel() // env.num_envs}",
     )
     check("动作向量维度 = 16", env.action_manager.total_action_dim == 16, f"{env.action_manager.total_action_dim}")
     term_dim = env.observation_manager.group_obs_term_dim["policy"]
@@ -343,16 +364,52 @@ if not args_cli.no_sim:
         bool(torch.allclose(cmd_block, obs2["policy"][0, 18:21].repeat(frame_stack))),
         f"cmd 三帧首元素 = {cmd_block[::3].tolist()}",
     )
-    depth_start = sum(dim for _, dim in ODIN_DEPTH_OBS_LAYOUT[: _terms.index("perception")]) * frame_stack
-    depth_block = obs["policy"][:, depth_start : depth_start + ODIN_DEPTH_FEATURE_DIM * frame_stack]
+    depth_memory = obs["depth_memory"]
     check(
-        "仿真 Odin1 深度网格有限且归一化到 0..1",
-        bool(torch.isfinite(depth_block).all())
-        and bool((depth_block >= 0.0).all())
-        and bool((depth_block <= 1.0).all()),
-        f"min={depth_block.min().item():.3f}, max={depth_block.max().item():.3f}",
+        "仿真 Odin1 深度记忆有限且归一化到 0..1",
+        bool(torch.isfinite(depth_memory).all())
+        and bool((depth_memory >= 0.0).all())
+        and bool((depth_memory <= 1.0).all()),
+        f"min={depth_memory.min().item():.3f}, max={depth_memory.max().item():.3f}",
+    )
+    check(
+        "回合首帧以当前深度复制初始化8帧",
+        bool(torch.allclose(depth_memory, depth_memory[:, :1].expand_as(depth_memory), atol=1e-6)),
     )
     check("Odin1 相机已挂入场景", "odin_depth_camera" in env.scene.sensors)
+    check(
+        "仿真深度使用光轴Z值",
+        "distance_to_image_plane" in env.scene.sensors["odin_depth_camera"].cfg.data_types,
+        f"{env.scene.sensors['odin_depth_camera'].cfg.data_types}",
+    )
+
+    # 用任务实际 CNN 配置做一次前向和单输入 ONNX 导出检查，不启动训练。
+    from importlib.metadata import version  # noqa: E402
+    from rsl_rl.runners import OnPolicyRunner  # noqa: E402
+    from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg  # noqa: E402
+    from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry  # noqa: E402
+    import tempfile  # noqa: E402
+    from onnx_utils import export_and_verify, expected_runner_input_dim  # noqa: E402
+
+    agent_cfg = load_cfg_from_registry(task, "rsl_rl_cfg_entry_point")
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, version("rsl-rl-lib"))
+    agent_cfg.device = args_cli.device if args_cli.device is not None else str(env.device)
+    wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    runner = OnPolicyRunner(wrapped, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    policy = runner.get_inference_policy(device=env.device)
+    with torch.inference_mode():
+        action_probe = policy(wrapped.get_observations())
+    check("CNN 策略前向输出16维动作", tuple(action_probe.shape) == (env.num_envs, NUM_JOINTS), f"{tuple(action_probe.shape)}")
+    check("RSL-RL CNN 展平输入维度", expected_runner_input_dim(runner) == ODIN_DEPTH_ONNX_INPUT_DIM, f"{expected_runner_input_dim(runner)}")
+    with tempfile.TemporaryDirectory(prefix="rpwd-odin-onnx-") as export_dir:
+        try:
+            exported = export_and_verify(
+                runner, export_dir, expected_input_dim=ODIN_DEPTH_ONNX_INPUT_DIM,
+                output_filename="policy_odin_depth.onnx",
+            )
+            check("CNN 策略可导出为部署端单输入 ONNX", os.path.isfile(exported))
+        except Exception as exc:
+            check("CNN 策略可导出为部署端单输入 ONNX", False, str(exc))
     del env
 else:
     print("\n[INFO] 跳过运行时检查 (--no-sim)")
