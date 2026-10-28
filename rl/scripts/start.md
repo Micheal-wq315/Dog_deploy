@@ -76,9 +76,30 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 
 # Odin1 深度策略 (训练完成后 GUI 回放并导出专属 ONNX)
 ./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/<run>/model_7999.pt
+
+# Odin1 深度模型量化测试：9组范围内指令，保存CSV、JSON、PNG和SVG
+# 每次指定新的保存目录，已有 samples.csv 时会拒绝覆盖
+./rl/scripts/gui_test.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/2026-10-28_12-21-00_odin1_curriculum8k/model_7999.pt \
+  --terrain-level 0 --eval-reset --seed 42 --num_envs 12 --sweep \
+  --settle_steps 50 --measure_steps 200 --headless \
+  --save-dir rl/logs/evaluation/odin_test_level0
+# 去掉 --headless 可打开GUI；--terrain-level 2 可测试更高难度
+
+# 保存完整训练数据与训练曲线：不启动仿真，可在训练期间使用
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate isaaclab
+python rl/scripts/plot_training.py \
+  --run rl/logs/rsl_rl/rp_wd_odin_depth/2026-10-28_12-21-00_odin1_curriculum8k \
+  --output-dir rl/logs/evaluation/odin_training
 ```
 
-**看什么**：`线速误差` 越小越好；`滑移比` 接近 1.0 = 四轮纯滚动（≈0.2 = 在用轮子当脚蹦）；`终止` = 期间摔倒次数。
+**测试数据**：`samples.csv` 保存每环境、每策略步的状态和终止原因；`summary.csv/json`
+只汇总测量阶段，`terrain_summary.json` 按地形类型汇总。`test_curves.png/svg` 为测试图，
+`training_curves.png/svg` 为训练图。固定等级会启用按难度行生成地形，并将所有环境放到指定行；
+它是混合地形速度测试，不代表某一台阶高度的通过率。测试中的非超时终止与正常超时分别计数。
+
+**看什么**：`线速误差` 越小越好；`滑移比` 仅是轮线速度与机身速度的粗略比值，原地转向时无意义，不能单独判断接触打滑。
 
 ---
 

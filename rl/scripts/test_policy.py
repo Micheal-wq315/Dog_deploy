@@ -26,6 +26,10 @@ from isaaclab.app import AppLauncher
 sys.stdout.reconfigure(line_buffering=True)
 
 parser = argparse.ArgumentParser(description="Test the latest RP_wd policy.")
+parser.add_argument("--task", type=str, default=None, help="显式指定任务；深度模型使用 OdinDepth-Play 任务。")
+parser.add_argument("--seed", type=int, default=42, help="测试随机种子。")
+parser.add_argument("--save-dir", type=str, default=None, help="保存逐环境 CSV、汇总、测试图和配置。")
+parser.add_argument("--eval-reset", action="store_true", help="固定出生朝向、零初速度，便于重复测试。")
 parser.add_argument(
     "--cmd", type=float, nargs=3, default=None, metavar=("VX", "VY", "WZ"),
     help="固定速度指令 [m/s, m/s, rad/s]; 不填则用训练分布的随机指令.",
@@ -39,7 +43,7 @@ parser.add_argument("--log_interval", type=int, default=25, help="每隔多少�
 parser.add_argument("--train-dist", action="store_true", default=False, help="用训练配置 (含域随机化+观测噪声) 测鲁棒性.")
 parser.add_argument("--rough", action="store_true", default=False, help="在崎岖地形上测试/遥控 (随机地形).")
 parser.add_argument("--terrain-level", type=int, default=None,
-                    help="崎岖地形难度等级 0-5 (0=最易, 5=最难); 默认用 Play 配置里的 2 级.")
+                    help="固定生成地形行号；普通任务0–5、OdinDepth任务0–11。")
 parser.add_argument("--export", action="store_true", default=False, help="同时导出 ONNX 到 rl/exported/.")
 parser.add_argument(
     "--teleop", type=str, default=None, choices=["gamepad", "keyboard", "udp"],
@@ -56,6 +60,10 @@ parser.add_argument("--settle_steps", type=int, default=100, help="扫描: 每�
 parser.add_argument("--measure_steps", type=int, default=150, help="扫描: 每组指令的测量时间 [步].")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+if args_cli.task and "OdinDepth" in args_cli.task:
+    args_cli.enable_cameras = True
+if args_cli.num_envs < 1 or args_cli.measure_steps < 1 or args_cli.settle_steps < 0:
+    parser.error("环境数和测量步数必须大于0，稳定步数不能小于0。")
 if args_cli.real_time is None:
     # GUI 下按真实时间步进看着才自然; 遥控时必须实时 (否则机器人以 80 倍速跑, 根本没法操控)
     args_cli.real_time = (not args_cli.headless) or (args_cli.teleop is not None)
@@ -89,6 +97,7 @@ from rp_wd_rl.assets.rp_wd_contract import (  # noqa: E402
     WHEEL_RADIUS,
 )
 from sim_shutdown import shutdown  # noqa: E402
+from evaluation_recorder import EvaluationRecorder  # noqa: E402
 
 _RL_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 LOG_ROOT = os.path.join(_RL_ROOT, "logs", "rsl_rl")
@@ -97,13 +106,13 @@ LOG_ROOT = os.path.join(_RL_ROOT, "logs", "rsl_rl")
 SWEEP_COMMANDS: list[tuple[float, float, float]] = [
     (0.0, 0.0, 0.0),    # 站立
     (0.5, 0.0, 0.0),    # 中速前进
-    (1.0, 0.0, 0.0),    # 最大前进
-    (-1.0, 0.0, 0.0),   # 最大后退
-    (0.0, 0.6, 0.0),    # 最大左移
-    (0.0, -0.6, 0.0),   # 最大右移
-    (0.0, 0.0, 1.0),    # 最大左转
-    (0.0, 0.0, -1.0),   # 最大右转
-    (0.8, 0.4, 0.5),    # 组合机动
+    (CMD_VX_RANGE[1], 0.0, 0.0),
+    (CMD_VX_RANGE[0], 0.0, 0.0),
+    (0.0, CMD_VY_RANGE[1], 0.0),
+    (0.0, CMD_VY_RANGE[0], 0.0),
+    (0.0, 0.0, CMD_WZ_RANGE[1]),
+    (0.0, 0.0, CMD_WZ_RANGE[0]),
+    (0.4, 0.2, 0.5),    # 范围内的组合机动
 ]
 
 
@@ -238,13 +247,17 @@ def format_line(step: int, m: dict, rew: float) -> str:
 
 
 def step_once(env, wrapped, policy) -> tuple[float, int]:
-    """策略走一步, 返回 (平均回报, 本步终止环境数)."""
+    """策略走一步，保存转移前状态及转移终止原因；超时单独计数。"""
     with torch.inference_mode():
+        recorder = getattr(env, "evaluation_recorder", None)
+        before = recorder.capture(env) if recorder is not None else None
         obs = wrapped.get_observations()
         act = policy(obs)
         _, rew, dones, _ = wrapped.step(act)
         policy.reset(dones)
-    return rew.mean().item(), int(dones.sum())
+        if recorder is not None:
+            recorder.record(env, before)
+    return rew.mean().item(), int(env.reset_terminated.sum())
 
 
 def run_continuous(env, wrapped, policy) -> None:
@@ -288,6 +301,8 @@ def run_continuous(env, wrapped, policy) -> None:
             hold_command(env, cmd.tolist())
         elif fixed is not None:
             hold_command(env, fixed)
+            if "base_posture" in env.command_manager.active_terms:
+                hold_posture(env, (0.0, 0.0, 0.0))
         rew, n_done = step_once(env, wrapped, policy)
         rew_acc += rew
         deaths += n_done
@@ -302,7 +317,7 @@ def run_continuous(env, wrapped, policy) -> None:
             sleep = POLICY_DT - (time.time() - t0)
             if sleep > 0:
                 time.sleep(sleep)
-    print(f"[INFO] 共 {step} 步 ({step * POLICY_DT:.1f}s 仿真时间), 摔倒 {deaths} 次, 墙钟 {time.time() - start:.1f}s.")
+    print(f"[INFO] 共 {step} 步 ({step * POLICY_DT:.1f}s 仿真时间), 非超时终止 {deaths} 次, 墙钟 {time.time() - start:.1f}s.")
 
 
 def run_sweep(env, wrapped, policy) -> None:
@@ -311,21 +326,36 @@ def run_sweep(env, wrapped, policy) -> None:
     print(f"[INFO] 扫描 {len(SWEEP_COMMANDS)} 组指令 (每组: 稳定 {args_cli.settle_steps} 步 + 测量 {args_cli.measure_steps} 步)\n")
     header = (
         f"{'指令 vx/vy/wz':>20} | {'实际 vx/vy/wz':>20} | {'线速误差':>8} | {'偏航误差':>8} "
-        f"| {'姿态°':>6} | {'高 m':>5} | {'滑移比':>6} | {'摔倒':>4}"
+        f"| {'姿态°':>6} | {'高 m':>5} | {'滑移比':>6} | {'终止':>4}"
     )
     print(header)
     print("-" * len(header))
-    for cmd in SWEEP_COMMANDS:
+    for case_index, cmd in enumerate(SWEEP_COMMANDS):
+        # 物理状态缓存在推理模式内生成，后续重置也必须使用相同模式。
+        with torch.inference_mode():
+            wrapped.reset()
+        recorder = getattr(env, "evaluation_recorder", None)
+        if recorder is not None:
+            recorder.case = f"{case_index:02d}_{cmd[0]:+.2f}_{cmd[1]:+.2f}_{cmd[2]:+.2f}"
+            recorder.phase = "settle"
         deaths = 0
         # 姿态/高度指令钉 0: 这一轮测的是**速度**跟踪, 随机的姿态指令会干扰读数
         if "base_posture" in env.command_manager.active_terms:
             hold_posture(env, (0.0, 0.0, 0.0))
         for _ in range(args_cli.settle_steps):
+            tick = time.monotonic()
             hold_command(env, cmd)
+            if "base_posture" in env.command_manager.active_terms:
+                hold_posture(env, (0.0, 0.0, 0.0))
             _, n_done = step_once(env, wrapped, policy)
             deaths += n_done
+            if args_cli.real_time:
+                time.sleep(max(0, POLICY_DT - (time.monotonic() - tick)))
+        if recorder is not None:
+            recorder.phase = "measure"
         acc = {k: 0.0 for k in ("err_lin", "err_yaw", "tilt_deg", "height", "slip", "vx", "vy", "wz")}
         for _ in range(args_cli.measure_steps):
+            tick = time.monotonic()
             hold_command(env, cmd)
             if "base_posture" in env.command_manager.active_terms:
                 hold_posture(env, (0.0, 0.0, 0.0))
@@ -340,6 +370,8 @@ def run_sweep(env, wrapped, policy) -> None:
             acc["vx"] += m["v"][0].item()
             acc["vy"] += m["v"][1].item()
             acc["wz"] += m["wz"].item()
+            if args_cli.real_time:
+                time.sleep(max(0, POLICY_DT - (time.monotonic() - tick)))
         n = max(args_cli.measure_steps, 1)
         print(
             f"{cmd[0]:+7.2f}/{cmd[1]:+5.2f}/{cmd[2]:+5.2f} | "
@@ -349,7 +381,7 @@ def run_sweep(env, wrapped, policy) -> None:
         )
     print(
         "\n[说明] 线速误差/偏航误差 = |实际-指令| 的均值; "
-        "滑移比 = 轮子线速度/机身速度 (>1.5 说明明显打滑); 摔倒 = 该组指令期间的真实终止次数."
+        "滑移比仅供参考（原地转向时无意义）；终止为该组含稳定阶段的非超时终止次数。"
     )
 
 
@@ -358,14 +390,27 @@ def main() -> None:
         print("[WARN] --teleop 与 --sweep 不能同时使用, 忽略 --sweep (进入遥控模式).")
         args_cli.sweep = False
     surface = "Rough" if args_cli.rough else "Flat"
-    task = f"Isaac-Velocity-{surface}-RPWD-v0" if args_cli.train_dist else f"Isaac-Velocity-{surface}-RPWD-Play-v0"
+    task = args_cli.task or (f"Isaac-Velocity-{surface}-RPWD-v0" if args_cli.train_dist else f"Isaac-Velocity-{surface}-RPWD-Play-v0")
     env_cfg = load_cfg_from_registry(task, "env_cfg_entry_point")
     agent_cfg = load_cfg_from_registry(task, "rsl_rl_cfg_entry_point")
 
     env_cfg.scene.num_envs = args_cli.num_envs
-    if args_cli.terrain_level is not None and args_cli.rough:
-        # 把地形难度钉死 (Play 配置下没有课程, max_init_terrain_level 就是固定难度)
+    env_cfg.seed = args_cli.seed
+    agent_cfg.seed = args_cli.seed
+    if args_cli.terrain_level is not None:
+        generator = env_cfg.scene.terrain.terrain_generator
+        if generator is None or not 0 <= args_cli.terrain_level < generator.num_rows:
+            raise ValueError("--terrain-level 必须对应生成地形中的有效行号。")
+        # 按行生成才能使“等级”对应真实难度；max_init 本身只限定随机行号上限。
+        generator.curriculum = True
+        generator.seed = args_cli.seed
         env_cfg.scene.terrain.max_init_terrain_level = args_cli.terrain_level
+        env_cfg.curriculum.terrain_levels = None
+    if args_cli.eval_reset:
+        env_cfg.events.reset_base.params.update(
+            pose_range={"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)},
+            velocity_range={},
+        )
     if args_cli.experiment_name is not None:
         agent_cfg.experiment_name = args_cli.experiment_name
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
@@ -379,29 +424,56 @@ def main() -> None:
     print(f"[INFO] 模型: {ckpt}")
     _lvl = getattr(args_cli, "terrain_level", None)
     _lvl = _lvl if _lvl is not None else getattr(env_cfg.scene.terrain, "max_init_terrain_level", None)
-    _info = f" (地形难度: {_lvl} 级)" if args_cli.rough else ""
-    print(f"[INFO] 任务: {task} ({'训练分布, 含域随机化' if args_cli.train_dist else 'Play, 无随机化'}){_info}")
+    _info = f" (地形行号: {_lvl})" if env_cfg.scene.terrain.terrain_generator is not None else ""
+    print(f"[INFO] 任务: {task}{_info}")
     env_cfg.log_dir = os.path.dirname(ckpt)
 
     # ---- 环境 + 策略 ----
     env = gym.make(task, cfg=env_cfg).unwrapped
+    if args_cli.terrain_level is not None:
+        terrain = env.scene.terrain
+        terrain.terrain_levels[:] = args_cli.terrain_level
+        terrain.env_origins[:] = terrain.terrain_origins[terrain.terrain_levels, terrain.terrain_types]
+        env.scene.env_origins[:] = terrain.env_origins
     wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    wrapped.reset()
     runner = OnPolicyRunner(wrapped, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     runner.load(ckpt)
     policy = runner.get_inference_policy(device=env.device)
+    if args_cli.save_dir:
+        env.evaluation_recorder = EvaluationRecorder(args_cli.save_dir, env, {
+            "checkpoint": ckpt, "task": task, "seed": args_cli.seed,
+            "terrain_level": args_cli.terrain_level, "num_envs": env.num_envs,
+            "eval_reset": args_cli.eval_reset, "settle_steps": args_cli.settle_steps,
+            "measure_steps": args_cli.measure_steps, "arguments": vars(args_cli),
+        })
 
     if args_cli.export:
-        dst = export_and_verify(runner, os.path.join(_RL_ROOT, "exported"))
-        print(f"[INFO] 部署: cp {dst} src/inference/robots/wheel_quad/models/policy_flat.onnx")
+        output_name = "policy_odin_depth.onnx" if "OdinDepth" in task else "policy_flat.onnx"
+        dst = export_and_verify(runner, os.path.join(_RL_ROOT, "exported"),
+            expected_input_dim=int(wrapped.get_observations()["policy"].shape[-1]),
+            output_filename=output_name)
+        print(f"[INFO] 部署: cp {dst} src/inference/robots/wheel_quad/models/{output_name}")
 
-    if args_cli.sweep:
-        run_sweep(env, wrapped, policy)
-    else:
-        run_continuous(env, wrapped, policy)
+    completed = False
+    try:
+        if args_cli.sweep:
+            run_sweep(env, wrapped, policy)
+        else:
+            run_continuous(env, wrapped, policy)
+        completed = True
+    finally:
+        if args_cli.save_dir:
+            env.evaluation_recorder.finish(completed=completed)
     print("\n[INFO] 测试结束.")
-    del env
+    env.close()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        shutdown(simulation_app, exit_code=1)
     shutdown(simulation_app)
