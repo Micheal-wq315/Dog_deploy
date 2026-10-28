@@ -477,6 +477,8 @@ class CurriculumCfg:
 
     # 崎岖地形版才启用 (见 rp_wd_rough_env_cfg.py); 这里预声明字段以便子类赋值
     terrain_levels: CurrTerm | None = None
+    # 深度课程任务中后段加入的周期推扰课程
+    push_curriculum: CurrTerm | None = None
     # Odin1 感知课程版使用: 后期渐进开启腿部力矩惩罚
     leg_torque_penalty: CurrTerm | None = None
 

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # 训练 Odin1 深度避障策略 (相机 + 粗糙地形 + 腿部力矩观测).
-# 默认 256 并行环境、5000 PPO 迭代、无头运行，并在训练期间阻止系统休眠。
+# 默认 256 并行环境、总计 8000 PPO 迭代、无头运行，并在训练期间阻止系统休眠。
 set -euo pipefail
+
+if [[ "${TERM:-dumb}" == "dumb" ]]; then
+    export TERM=xterm-256color
+fi
 
 # shellcheck source=./_common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"

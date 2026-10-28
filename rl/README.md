@@ -53,7 +53,7 @@ export ISAACLAB_PATH=/media/rmer/data/IsaacLab
 ./rl/scripts/train.sh
 ./rl/scripts/train.sh --num_envs 4096 --max_iterations 5000 --run_name dr_v1
 
-# Odin1 深度避障策略 (独立 profile; headless 相机渲染; 默认 256 env / 5000 iter)
+# Odin1 深度避障策略 (独立 profile; headless 相机渲染; 默认 256 env / 8000 iter)
 ./rl/scripts/train_odin_depth.sh --run_name odin1_v1
 
 # 2) 回放 (需要图形界面) + 导出 ONNX
@@ -116,7 +116,7 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 | 深度增强 | 0.03 m 高斯噪声、1% 随机缺测、80–100% 随机裁切/缩放，特征采用每格最近距离并归一化到 0..1 |
 | 仿真相机 | 前向 160×120、约 120°×90°、0.2–6 m；安装位姿是待实测标定的初始估值 |
 | 障碍课程 | 继承轮足 rough 地形、摩擦/质量/质心/执行器/关节/IMU/推力随机化，并增加箱体障碍 |
-| 力矩惩罚课程 | 约第 3500 iter 开始，500 iter 渐增到 `dof_torques_l2=-1e-5` |
+| 力矩惩罚课程 | 第 5600–6800 iter 渐增到 `dof_torques_l2=-1e-5` |
 | 任务 ID | `Isaac-Velocity-Rough-RPWD-OdinDepth-v0` / `...-OdinDepth-Play-v0` |
 | ROS2 部署 | Odin1 官方深度图 → `odin_depth_adapter.launch.py` → `/odin1/depth_features` → `policy:=odin_depth` |
 
@@ -124,6 +124,8 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 用 `./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint <path>`
 做仿真回放并导出专属 ONNX。当前策略消费三帧深度网格历史；
 Odin1 空间记忆功能本身尚未作为单独输入接入。
+
+完整的 8000 轮分阶段课程、地形上限和续训规则见 [CURRICULUM.md](CURRICULUM.md)。
 
 **最容易写错的两点**（都已在校验脚本里逐项检查）：
 

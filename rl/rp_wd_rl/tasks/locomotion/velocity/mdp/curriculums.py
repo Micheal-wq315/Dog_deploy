@@ -79,10 +79,12 @@ def terrain_levels_vel(
     env: ManagerBasedRLEnv,
     env_ids: Sequence[int],
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    max_level_schedule: tuple[tuple[int, int], ...] | None = None,
 ) -> torch.Tensor:
     """按机器人走出的距离升降**地形难度等级** (崎岖地形课程).
 
-    走够半个地块宽度就升级, 走得不到指令距离的一半就降级.
+    走够半个地块宽度就升级, 走得不到指令距离的一半就降级。
+    max_level_schedule 可选地用 (策略步, 最高等级) 限制早期难度；到达上限时保持当前等级。
 
     源码取自 Isaac Lab 2.3.2 的 velocity 任务
     (`isaaclab_tasks/manager_based/locomotion/velocity/mdp/curriculums.py:27-56`),
@@ -105,7 +107,22 @@ def terrain_levels_vel(
     # 走不到指令距离的一半 -> 降级
     move_down = distance < torch.norm(command[env_ids, :2], dim=1) * env.max_episode_length_s * 0.5
     move_down *= ~move_up
+    level_cap = None
+    if max_level_schedule:
+        level_cap = max_level_schedule[0][1]
+        for step, cap in max_level_schedule:
+            if env.common_step_counter >= step:
+                level_cap = cap
+        level_cap = min(level_cap, terrain.terrain_origins.shape[0] - 1)
+        # 时间表只解锁难度上限，能否升级仍由实际行进表现决定。
+        move_up &= terrain.terrain_levels[env_ids] < level_cap
     terrain.update_env_origins(env_ids, move_up, move_down)
+    if level_cap is not None:
+        # 高级索引返回副本，因此显式写回等级与出生原点。
+        terrain.terrain_levels[env_ids] = terrain.terrain_levels[env_ids].clamp(max=level_cap)
+        terrain.env_origins[env_ids] = terrain.terrain_origins[
+            terrain.terrain_levels[env_ids], terrain.terrain_types[env_ids]
+        ]
     return torch.mean(terrain.terrain_levels.float())
 
 def posture_command_curriculum(
@@ -139,6 +156,35 @@ def posture_command_curriculum(
     r.roll = (CMD_ROLL_RANGE[0] * scale, CMD_ROLL_RANGE[1] * scale)
     r.height = (CMD_HEIGHT_RANGE[0] * scale, CMD_HEIGHT_RANGE[1] * scale)
     return scale
+
+
+def push_velocity_curriculum(
+    env: ManagerBasedRLEnv,
+    env_ids,
+    term_name: str = "push_robot",
+    start_step: int = 24_000,
+    ramp_steps: int = 120_000,
+    max_push_x: float = 0.6,
+    max_push_y: float = 0.4,
+    max_push_z: float = 0.2,
+    ramp_bins: int = 20,
+) -> float:
+    """先让策略适应地形，再从零逐渐加入周期外力扰动."""
+    step = env.common_step_counter
+    progress = min(1.0, max(0.0, (step - start_step) / max(ramp_steps, 1)))
+    if progress < 1.0 and ramp_bins > 0:
+        progress = int(progress * ramp_bins) / ramp_bins
+
+    ranges = {
+        "x": (-max_push_x * progress, max_push_x * progress),
+        "y": (-max_push_y * progress, max_push_y * progress),
+        "z": (-max_push_z * progress, max_push_z * progress),
+    }
+    cfg = env.event_manager.get_term_cfg(term_name)
+    if cfg.params.get("velocity_range") != ranges:
+        cfg.params["velocity_range"] = ranges
+        env.event_manager.set_term_cfg(term_name, cfg)
+    return progress
 
 
 def late_reward_weight_ramp(

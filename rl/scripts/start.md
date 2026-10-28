@@ -27,15 +27,19 @@
 ./rl/scripts/train.sh --resume                           # 从最新 checkpoint 续训
 ./rl/scripts/train.sh --resume --load_run 2026-10-11_11-35-05_rolling_v4 --checkpoint model_1500.pt
 
-# Odin1 深度避障 (默认 256 环境、5000 iter、headless)
+# Odin1 深度避障 (默认 256 环境、总计 8000 iter、headless)
 ./rl/scripts/train_odin_depth.sh --run_name odin1_v1
+# 续训到总目标 8000；checkpoint 使用指定 run 中的最新模型
+./rl/scripts/train_odin_depth.sh --resume --max_iterations 8000 --run_name odin1_curriculum8k
 ```
 
 - 日志：`rl/logs/train_*.log`（训练 stdout）＋ `rl/logs/rsl_rl/<实验名>/<时间戳>_<run_name>/`（TensorBoard + checkpoint）
 - 训练期间**自动阻止系统休眠**（`systemd-inhibit`），夜间不会被冻死
 - 关键指标在 TensorBoard 里看 `Episode_Reward/*`（跟踪 vs 惩罚的配比）和 `Episode_Termination/*`
 - 深度相机使用离屏渲染；训练仍无 GUI，但比普通任务更占渲染资源
-- 腿部力矩惩罚约从第 3500 iter 开始，500 iter 渐增到 `-1e-5`
+- 深度课程：100–2400 轮扩展速度、1500–4000 轮扩展姿态、1200–5000 轮加入推扰；5600–6800 轮渐增腿部力矩惩罚
+- 地形最高等级按 0/1000/2500/4500/6000 轮解锁为 1/3/5/8/11；升级仍依赖实际行进表现，课程详见 `rl/CURRICULUM.md`
+- `--max_iterations` 表示包含已完成轮数的总目标；续训恢复课程步数，从 checkpoint 下一轮开始
 
 ```bash
 tail -f rl/logs/train_rolling_*.log                      # 实时看迭代/回报
@@ -71,7 +75,7 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 ./rl/scripts/test_policy.sh --export                     # 测试同时导出 ONNX
 
 # Odin1 深度策略 (训练完成后 GUI 回放并导出专属 ONNX)
-./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/<run>/model_4999.pt
+./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/<run>/model_7999.pt
 ```
 
 **看什么**：`线速误差` 越小越好；`滑移比` 接近 1.0 = 四轮纯滚动（≈0.2 = 在用轮子当脚蹦）；`终止` = 期间摔倒次数。

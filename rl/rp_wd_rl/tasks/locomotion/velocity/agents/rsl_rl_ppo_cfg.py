@@ -64,5 +64,5 @@ class RPWDRoughPPORunnerCfg(RPWDFlatPPORunnerCfg):
 class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
     """Odin1 深度避障 PPO; 相机 rollout 采用较少并行环境控制显存."""
 
-    max_iterations = 5000
+    max_iterations = 8000
     experiment_name = "rp_wd_odin_depth"

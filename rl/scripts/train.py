@@ -25,7 +25,7 @@ sys.stdout.reconfigure(line_buffering=True)
 parser = argparse.ArgumentParser(description="Train RP_wd policy with RSL-RL.")
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Flat-RPWD-v0", help="注册的任务名.")
 parser.add_argument("--num_envs", type=int, default=None, help="并行环境数 (默认取环境配置里的值).")
-parser.add_argument("--max_iterations", type=int, default=None, help="训练迭代数.")
+parser.add_argument("--max_iterations", type=int, default=None, help="总训练迭代目标，续训时包含已完成的迭代.")
 parser.add_argument("--seed", type=int, default=None, help="随机种子.")
 parser.add_argument("--video", action="store_true", default=False, help="录制训练视频.")
 parser.add_argument("--video_length", type=int, default=200, help="视频长度 (步).")
@@ -177,11 +177,28 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     if agent_cfg.resume:
         print(f"[INFO] 加载模型: {resume_path}")
         runner.load(resume_path)
+        # RSL-RL checkpoint 的 iter 是最后已完成的索引。下一次从 iter+1 开始，
+        # 并恢复课程时钟，避免续训后速度/感知/力矩课程重新从第 0 轮计时。
+        runner.current_learning_iteration = int(runner.current_learning_iteration) + 1
+        env.unwrapped.common_step_counter = runner.current_learning_iteration * agent_cfg.num_steps_per_env
+        env.reset()
+
+    remaining_iterations = agent_cfg.max_iterations - runner.current_learning_iteration
+    if remaining_iterations <= 0:
+        raise ValueError(
+            f"总目标 {agent_cfg.max_iterations} 已达到；"
+            f"checkpoint 已完成 {runner.current_learning_iteration} 次迭代。"
+        )
+    print(
+        f"[INFO] 训练目标: {agent_cfg.max_iterations}; "
+        f"起始迭代: {runner.current_learning_iteration}; 剩余更新: {remaining_iterations}; "
+        f"课程策略步: {env.unwrapped.common_step_counter}"
+    )
 
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    runner.learn(num_learning_iterations=remaining_iterations, init_at_random_ep_len=True)
 
     print(f"Training time: {round(time.time() - start_time, 2)} seconds")
     env.close()
