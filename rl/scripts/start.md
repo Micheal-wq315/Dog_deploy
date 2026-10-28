@@ -90,10 +90,16 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
   --save-dir rl/logs/evaluation/odin_test_level0
 # 去掉 --headless 可打开GUI；--terrain-level 2 可测试更高难度
 
-# 保存 Odin 原图、90°校正图、16×12策略网格及PNG预览（每25步，约0.5秒一帧）
-./rl/scripts/gui_test.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \\
-  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_7999.pt \\
+# 保存 Odin 原图、90°/270°方向候选、16×12策略网格及PNG预览（每25步，约0.5秒一帧）
+./rl/scripts/gui_test.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_7999.pt \
   --cmd 0.3 0 0 --save-dir rl/logs/evaluation/odin_depth_check --save-depth
+
+# 固定场景基准：平地、6cm上阶、8cm下阶、12cm矮箱、45cm绕行墙、45cm交错障碍
+# 默认12环境、前进0.35m/s、400步；保存每场景深度图与CSV/JSON/曲线
+./rl/scripts/gui_test.sh --obstacle-benchmark \
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_<iter>.pt \
+  --save-dir rl/logs/evaluation/odin_obstacle_benchmark --save-depth --headless
 
 # 保存完整训练数据与训练曲线：不启动仿真，可在训练期间使用
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -102,6 +108,8 @@ python rl/scripts/plot_training.py \
   --run rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run> \
   --output-dir rl/logs/evaluation/odin_training
 ```
+
+固定场景基准的 `terrain_summary.json` 按场景汇总前进进度、1.5m进度比例、停滞帧比例和非超时终止。进度是通行能力线索，不能直接当作“无碰撞通过率”：当前地形碰撞体合并为一个 mesh，无法把障碍碰撞与正常轮地接触精确分开。
 
 **测试数据**：`samples.csv` 保存每环境、每策略步的状态和终止原因；`summary.csv/json`
 只汇总测量阶段，`terrain_summary.json` 按地形类型汇总。`--save-depth` 会生成 `depth_frames/`
@@ -174,6 +182,21 @@ ros2 launch roboparty_inference inference.launch.py robot:=wheel_quad policy:=od
 ONNX 为1740→16。训练侧对深度加入0.03m高斯噪声、1%像素缺测和80–100%随机裁切；仿真与adapter
 都将160×120原图逆时针旋转90°，再按0.2–6m裁剪并生成16行×12列最近距离特征。实物朝向相反时将
 `rotation_deg`设为270。上机前用 `--save-depth` 检查原图/校正图/网格，并校准相机安装位姿。
+
+采集真实 Odin1 数据校准旋转/量程（先 source ROS 2 与工作空间，并启动官方深度节点）：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/Dog_deploy-main/Dog_deploy-main
+colcon build --packages-select roboparty_inference
+source install/setup.bash
+ros2 topic type /odin1/depth_img_competetion
+ros2 run roboparty_inference odin_depth_calibrate.py \
+  --topic /odin1/depth_img_competetion --frames 1 \
+  --output rl/logs/evaluation/odin_depth_calibration
+```
+
+将已知障碍放在相机正前方，检查输出目录的 `rotation_candidates.png` 和 `grid_candidates.png`，确认障碍落在策略网格的前方区域，再决定 adapter 使用90°还是270°。工具会保存原始 `.npy`、encoding、图像尺寸、有效像素比例和深度统计；如果 `ros2 topic type` 不是 `sensor_msgs/msg/Image`，需按官方消息类型调整 adapter，不能直接套用此脚本。
 
 实机手柄：`is_joy_control_` 默认开启，左摇杆 axes[4]/axes[3] → vx/vy，LT/RT → ωz，带 `clip_cmd` 限幅。
 

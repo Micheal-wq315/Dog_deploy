@@ -68,3 +68,13 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:RPWDOdinDepthPPORunnerCfg",
     },
 )
+
+gym.register(
+    id="Isaac-Velocity-Rough-RPWD-OdinDepth-Benchmark-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.rp_wd_odin_depth_env_cfg:RPWDOdinDepthEnvCfg_BENCHMARK",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:RPWDOdinDepthPPORunnerCfg",
+    },
+)

@@ -6,11 +6,14 @@ import copy
 
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
+import numpy as np
+import trimesh
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import TiledCameraCfg
+from isaaclab.terrains import SubTerrainBaseCfg, TerrainGeneratorCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
@@ -23,6 +26,62 @@ from rp_wd_rl.assets.rp_wd_contract import (
 from . import mdp
 from .rp_wd_env_cfg import ObservationsCfg
 from .rp_wd_rough_env_cfg import RPWD_ROUGH_TERRAINS_CFG, RPWDRoughEnvCfg, RPWDRoughSceneCfg
+
+
+ODIN_BENCHMARK_SCENARIOS = (
+    "flat_reference",
+    "step_up_06cm",
+    "step_down_08cm",
+    "low_box_12cm",
+    "bypass_wall_45cm",
+    "slalom_45cm",
+)
+
+
+def odin_fixed_benchmark_terrain(difficulty, cfg):
+    """固定几何评测场景；出生点在 x=0.8m，前进方向为 +X。"""
+    del difficulty
+    size_x, size_y = cfg.size
+    floor = trimesh.creation.box(
+        extents=(size_x, size_y, 0.10),
+        transform=trimesh.transformations.translation_matrix((size_x / 2, size_y / 2, -0.05)),
+    )
+    meshes = [floor]
+    origin = np.array((0.8, size_y / 2, 0.0), dtype=np.float32)
+
+    def add_box(x, y, z, dx, dy, dz):
+        meshes.append(trimesh.creation.box(
+            extents=(dx, dy, dz),
+            transform=trimesh.transformations.translation_matrix((x, y, z)),
+        ))
+
+    scenario = cfg.scenario
+    if scenario == "step_up_06cm":
+        add_box(2.75, size_y / 2, 0.03, 1.5, size_y, 0.06)
+    elif scenario == "step_down_08cm":
+        add_box(1.1, size_y / 2, 0.04, 2.2, size_y, 0.08)
+        origin[2] = 0.08
+    elif scenario == "low_box_12cm":
+        add_box(2.35, size_y / 2, 0.06, 0.40, 1.0, 0.12)
+    elif scenario == "bypass_wall_45cm":
+        # 留出两侧各约1m通道，要求策略绕过高于轮半径的障碍。
+        add_box(2.65, size_y / 2, 0.225, 0.32, size_y - 2.0, 0.45)
+    elif scenario == "slalom_45cm":
+        # 前后交错摆放，至少需要一次明显的横向绕行。
+        add_box(2.35, size_y * 0.66, 0.225, 0.42, 1.65, 0.45)
+        add_box(3.95, size_y * 0.34, 0.225, 0.42, 1.65, 0.45)
+    elif scenario != "flat_reference":
+        raise ValueError(f"未知 Odin 固定评测场景: {scenario}")
+
+    return meshes, origin
+
+
+@configclass
+class OdinBenchmarkTerrainCfg(SubTerrainBaseCfg):
+    """固定障碍评测子地形配置。"""
+
+    function = odin_fixed_benchmark_terrain
+    scenario: str = "flat_reference"
 
 
 def curriculum_random_rough_terrain(difficulty, cfg):
@@ -225,3 +284,30 @@ class RPWDOdinDepthEnvCfg_PLAY(RPWDOdinDepthEnvCfg):
         self.curriculum.posture_command = None
         self.curriculum.push_curriculum = None
         self.commands.base_velocity.rel_standing_envs = 0.0
+
+
+@configclass
+class RPWDOdinDepthEnvCfg_BENCHMARK(RPWDOdinDepthEnvCfg_PLAY):
+    """固定障碍/台阶基准：每列一种场景，每场景默认2个并行环境。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = len(ODIN_BENCHMARK_SCENARIOS) * 2
+        self.scene.terrain.terrain_generator = TerrainGeneratorCfg(
+            seed=20261028,
+            curriculum=True,
+            size=(6.0, 6.0),
+            num_rows=1,
+            num_cols=len(ODIN_BENCHMARK_SCENARIOS),
+            border_width=20.0,
+            border_height=1.0,
+            difficulty_range=(0.0, 0.0),
+            use_cache=False,
+            sub_terrains={
+                name: OdinBenchmarkTerrainCfg(proportion=1.0, scenario=name)
+                for name in ODIN_BENCHMARK_SCENARIOS
+            },
+        )
+        self.scene.terrain.max_init_terrain_level = 0
+        # 固定基准不根据行走距离升级/降级；每次复测都落在同一场景列。
+        self.curriculum.terrain_levels = None

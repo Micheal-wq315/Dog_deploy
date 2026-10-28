@@ -41,6 +41,7 @@ class EvaluationRecorder:
             raise FileExistsError(f"已有测试数据，请换一个 --save-dir: {self.directory}")
         self.metadata = metadata
         self.save_depth = save_depth
+        self.obstacle_benchmark = bool(metadata.get("obstacle_benchmark", False))
         self.metadata.update(created_at=datetime.now().astimezone().isoformat(), step_dt=env.step_dt)
         self.metadata["notes"] = [
             "状态在物理转移前采样，终止原因来自随后的转移；可能多个原因同时触发。",
@@ -48,6 +49,7 @@ class EvaluationRecorder:
             "ImplicitActuator的applied_torque为裁剪后的PD估计力矩，不是PhysX直接测得的驱动力矩。",
             "测试为确定性策略、混合地形速度扫描，不代表指定高度台阶的通过率。",
             "零指令阶段的低速不计入低速比例；有指令时速度低于0.05m/s仅作为低速线索。",
+            "固定障碍基准的前进距离/停滞比例是通行能力线索；当前地形碰撞体合并为一个mesh，不能据此报告精确障碍碰撞率。",
         ]
         terrain = env.scene.terrain
         generator = terrain.cfg.terrain_generator
@@ -67,7 +69,8 @@ class EvaluationRecorder:
         self.wheel_ids = [i for i, name in enumerate(env.scene["robot"].joint_names) if "FOOT" in name]
         self.columns = ["cmd_vx", "cmd_vy", "cmd_wz", "vx", "vy", "wz", "error_xy", "error_yaw",
                         "tilt_deg", "world_height_m", "ground_height_m", "root_clearance_m", "origin_height_m", "leg_torque_peak_nm",
-                        "wheel_torque_peak_nm", "distance_origin_m", "speed_xy", "terrain_level", "terrain_column"]
+                        "wheel_torque_peak_nm", "distance_origin_m", "forward_progress_m", "lateral_offset_m",
+                        "speed_xy", "terrain_level", "terrain_column"]
         self.file = (self.directory / "samples.csv").open("w", newline="")
         self.writer = csv.DictWriter(self.file, fieldnames=[
             "step", "time_s", "env_id", "case", "phase", "terrain_name", *self.columns,
@@ -78,6 +81,7 @@ class EvaluationRecorder:
         self.case = "continuous"
         self.phase = "measure"
         self.step = 0
+        self._saved_depth_scenarios = set()
 
     def capture(self, env):
         robot = env.scene["robot"].data
@@ -96,6 +100,8 @@ class EvaluationRecorder:
             robot.applied_torque[:, self.leg_ids].abs().amax(dim=1),
             robot.applied_torque[:, self.wheel_ids].abs().amax(dim=1),
             torch.linalg.vector_norm(robot.root_pos_w[:, :2] - env.scene.env_origins[:, :2], dim=1),
+            robot.root_pos_w[:, 0] - env.scene.env_origins[:, 0],
+            robot.root_pos_w[:, 1] - env.scene.env_origins[:, 1],
             torch.linalg.vector_norm(vel[:, :2], dim=1),
             getattr(terrain, "terrain_levels", zeros), getattr(terrain, "terrain_types", zeros),
         ], dim=1)
@@ -105,9 +111,13 @@ class EvaluationRecorder:
         dones = torch.stack([env.reset_terminated, env.reset_time_outs,
                              *[env.termination_manager.get_term(name) for name in self.term_names]], dim=1).cpu().numpy()
         for i, (row, flags) in enumerate(zip(values, dones)):
+            terrain_name = self.names.get(int(row[-1]), "plane")
+            case = self.case
+            if self.obstacle_benchmark:
+                case = terrain_name if self.case == "continuous" else f"{self.case}__{terrain_name}"
             entry = {"step": self.step, "time_s": self.step * env.step_dt,
-                     "env_id": i, "case": self.case, "phase": self.phase,
-                     "terrain_name": self.names.get(int(row[-1]), "plane")}
+                     "env_id": i, "case": case, "phase": self.phase,
+                     "terrain_name": terrain_name}
             entry.update(zip(self.columns, map(float, row)))
             entry.update(zip(["terminated", "timeout", *["done_" + name for name in self.term_names]], map(int, flags)))
             self.writer.writerow(entry)
@@ -119,39 +129,60 @@ class EvaluationRecorder:
             self._save_depth_preview(env)
 
     def _save_depth_preview(self, env):
-        """保存原图、旋转校正图及策略使用的深度网格。"""
+        """保存原图、旋转候选及策略网格；固定基准每个场景保存首张。"""
         camera = env.scene.sensors.get("odin_depth_camera")
         if camera is None:
             raise RuntimeError("请求保存深度数据，但场景中没有 odin_depth_camera 传感器。")
         depth = camera.data.output["distance_to_image_plane"]
         if depth.ndim == 4:
             depth = depth[..., 0]
-        raw = depth[0].detach().float().cpu().numpy()
+        if self.obstacle_benchmark:
+            terrain_types = env.scene.terrain.terrain_types.detach().cpu().tolist()
+            samples = {}
+            for env_id, terrain_type in enumerate(terrain_types):
+                samples.setdefault(int(terrain_type), env_id)
+        else:
+            samples = {0: 0}
+        for terrain_type, env_id in samples.items():
+            scenario = self.names.get(terrain_type, "plane") if self.obstacle_benchmark else ""
+            if scenario and scenario in self._saved_depth_scenarios:
+                continue
+            self._save_depth_sample(depth[env_id].detach().float().cpu().numpy(), scenario)
+            if scenario:
+                self._saved_depth_scenarios.add(scenario)
+
+    def _save_depth_sample(self, raw: np.ndarray, scenario: str):
+        """保存单个环境的原图、方向候选及策略网格。"""
         valid = np.isfinite(raw) & (raw > 0.0)
         clipped = np.where(valid, np.clip(raw, 0.2, 6.0), 6.0).astype(np.float32)
         corrected = np.rot90(clipped, k=ODIN_DEPTH_ROTATION_K).copy()
+        reverse_corrected = np.rot90(clipped, k=3).copy()
         grid_h, grid_w = ODIN_DEPTH_GRID_SIZE[1], ODIN_DEPTH_GRID_SIZE[0]
         grid_m = -F.adaptive_max_pool2d(
             -torch.from_numpy(corrected)[None, None], (grid_h, grid_w)
         )[0, 0].numpy()
         grid_norm = np.clip(grid_m / 6.0, 0.0, 1.0)
-        stem = f"depth_{self.step:06d}"
+        suffix = f"_{scenario}" if scenario else ""
+        stem = f"depth_{self.step:06d}{suffix}"
         np.save(self.directory / "depth_frames" / f"{stem}.npy", raw)
         np.save(self.directory / "depth_frames" / f"{stem}_rot90_ccw.npy", corrected)
+        np.save(self.directory / "depth_frames" / f"{stem}_rot270_ccw.npy", reverse_corrected)
         np.save(self.directory / "depth_frames" / f"{stem}_grid16x12_m.npy", grid_m)
         np.save(self.directory / "depth_frames" / f"{stem}_grid16x12_norm.npy", grid_norm)
         plt = setup_plotting()
-        fig, axes = plt.subplots(1, 3, figsize=(12, 4), layout="constrained")
+        fig, axes = plt.subplots(1, 4, figsize=(16, 4), layout="constrained")
         for ax, image, title in (
-            (axes[0], clipped, "传感器原图（米）"),
-            (axes[1], corrected, "旋转90°后的深度图（米）"),
-            (axes[2], grid_m, "策略网格（16×12，米）"),
+            (axes[0], clipped, "原始图，不旋转（米）"),
+            (axes[1], corrected, "逆时针90°（米）"),
+            (axes[2], reverse_corrected, "逆时针270°（米）"),
+            (axes[3], grid_m, "策略输入 H16×W12（米）"),
         ):
             plot = ax.imshow(image, cmap="turbo", vmin=0.2, vmax=6.0, interpolation="nearest")
             ax.set_title(title)
             ax.set_axis_off()
             fig.colorbar(plot, ax=ax, fraction=0.046, pad=0.04, label="米")
-        fig.suptitle(f"仿真步 {self.step} · 有效像素 {valid.mean():.1%}")
+        title = f"{scenario} · " if scenario else ""
+        fig.suptitle(f"{title}仿真步 {self.step} · 有效像素 {valid.mean():.1%}")
         fig.savefig(self.directory / "depth_frames" / f"{stem}.png", dpi=140)
         plt.close(fig)
 
@@ -176,6 +207,18 @@ class EvaluationRecorder:
                 np.hypot(r["cmd_vx"], r["cmd_vy"]) > .1 and r["speed_xy"] < .05 for r in rows]))
             for name in ["terminated", "timeout", *["done_" + n for n in self.term_names]]:
                 summary[name] = sum(r[name] for r in rows)
+            if self.obstacle_benchmark:
+                trajectories = {}
+                for row in rows:
+                    trajectories.setdefault(row["env_id"], []).append(row)
+                max_progress = [max(r["forward_progress_m"] for r in traj) for traj in trajectories.values()]
+                summary["tested_envs"] = len(trajectories)
+                summary["mean_max_forward_progress_m"] = float(np.mean(max_progress))
+                summary["median_max_forward_progress_m"] = float(np.median(max_progress))
+                summary["progress_ge_1_5m_fraction"] = float(np.mean(np.asarray(max_progress) >= 1.5))
+                summary["stuck_frame_fraction"] = float(np.mean([
+                    r["cmd_vx"] > 0.1 and r["vx"] < 0.05 for r in rows
+                ]))
             summaries.append(summary)
         with (self.directory / "summary.csv").open("w", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=list(summaries[0]))
@@ -190,6 +233,19 @@ class EvaluationRecorder:
                 "mean_error_xy": float(np.mean([r["error_xy"] for r in rows])),
                 "mean_tilt_deg": float(np.mean([r["tilt_deg"] for r in rows])),
                 "terminations": sum(r["terminated"] for r in rows)}
+            if self.obstacle_benchmark:
+                trajectories = {}
+                for row in rows:
+                    trajectories.setdefault(row["env_id"], []).append(row)
+                max_progress = [max(r["forward_progress_m"] for r in traj) for traj in trajectories.values()]
+                terrain_summary[name].update({
+                    "tested_envs": len(trajectories),
+                    "mean_max_forward_progress_m": float(np.mean(max_progress)),
+                    "progress_ge_1_5m_fraction": float(np.mean(np.asarray(max_progress) >= 1.5)),
+                    "stuck_frame_fraction": float(np.mean([
+                        r["cmd_vx"] > 0.1 and r["vx"] < 0.05 for r in rows
+                    ])),
+                })
         (self.directory / "terrain_summary.json").write_text(json.dumps(terrain_summary, ensure_ascii=False, indent=2))
         self.plot(summaries)
         print(f"[INFO] 测试数据与图已保存: {self.directory}")

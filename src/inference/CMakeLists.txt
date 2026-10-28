@@ -89,6 +89,9 @@ install(DIRECTORY scripts
 install(PROGRAMS scripts/odin_depth_adapter.py
   DESTINATION lib/${PROJECT_NAME}
 )
+install(PROGRAMS scripts/odin_depth_calibrate.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 install(DIRECTORY launch 
   DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY robots

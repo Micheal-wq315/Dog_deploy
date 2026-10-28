@@ -30,6 +30,8 @@ parser.add_argument("--task", type=str, default=None, help="显式指定任务�
 parser.add_argument("--seed", type=int, default=42, help="测试随机种子。")
 parser.add_argument("--save-dir", type=str, default=None, help="保存逐环境 CSV、汇总、测试图和配置。")
 parser.add_argument("--save-depth", action="store_true", help="每0.5秒保存原始图、旋转校正图及16×12网格；需要 --save-dir。")
+parser.add_argument("--obstacle-benchmark", action="store_true",
+                    help="使用固定的平地/台阶/障碍场景，默认前进0.35m/s并运行400步。")
 parser.add_argument("--eval-reset", action="store_true", help="固定出生朝向、零初速度，便于重复测试。")
 parser.add_argument(
     "--cmd", type=float, nargs=3, default=None, metavar=("VX", "VY", "WZ"),
@@ -38,8 +40,8 @@ parser.add_argument(
 parser.add_argument("--sweep", action="store_true", default=False, help="自动扫描一组典型指令并输出汇总表 (覆盖 --cmd).")
 parser.add_argument("--checkpoint", type=str, default=None, help="模型文件 (.pt); 缺省用最新的.")
 parser.add_argument("--experiment_name", type=str, default=None, help="实验名 (定位日志目录).")
-parser.add_argument("--num_envs", type=int, default=16, help="并行环境数 (GUI 下建议 ≤32).")
-parser.add_argument("--max_steps", type=int, default=0, help="总步数上限 (0 = 一直跑, 关窗/Ctrl+C 退出).")
+parser.add_argument("--num_envs", type=int, default=None, help="并行环境数 (GUI 下建议 ≤32).")
+parser.add_argument("--max_steps", type=int, default=None, help="总步数上限 (默认测试常规模式不限步；固定基准400步).")
 parser.add_argument("--log_interval", type=int, default=25, help="每隔多少步打印一行指标 (25 步 = 0.5 s).")
 parser.add_argument("--train-dist", action="store_true", default=False, help="用训练配置 (含域随机化+观测噪声) 测鲁棒性.")
 parser.add_argument("--rough", action="store_true", default=False, help="在崎岖地形上测试/遥控 (随机地形).")
@@ -61,6 +63,32 @@ parser.add_argument("--settle_steps", type=int, default=100, help="扫描: 每�
 parser.add_argument("--measure_steps", type=int, default=150, help="扫描: 每组指令的测量时间 [步].")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+if args_cli.obstacle_benchmark:
+    benchmark_task = "Isaac-Velocity-Rough-RPWD-OdinDepth-Benchmark-v0"
+    if args_cli.task and args_cli.task != benchmark_task:
+        parser.error("--obstacle-benchmark 与其他 --task 不能同时指定。")
+    if args_cli.rough or args_cli.terrain_level is not None:
+        parser.error("固定基准不能同时使用 --rough 或 --terrain-level。")
+    if args_cli.sweep or args_cli.teleop is not None or args_cli.train_dist:
+        parser.error("固定基准只测确定性直线行走，不能与 --sweep、遥控或 --train-dist 混用。")
+    args_cli.task = benchmark_task
+    if args_cli.num_envs is None:
+        args_cli.num_envs = 12
+    if args_cli.num_envs < 6 or args_cli.num_envs % 6 != 0:
+        parser.error("固定基准的 --num_envs 必须是6的正整数倍，默认12。")
+    if args_cli.cmd is None and not args_cli.sweep:
+        args_cli.cmd = (0.35, 0.0, 0.0)
+    if args_cli.cmd is not None and (
+        args_cli.cmd[0] <= 0.0 or abs(args_cli.cmd[1]) > 1e-6 or abs(args_cli.cmd[2]) > 1e-6
+    ):
+        parser.error("固定基准需要正向直行指令：vx>0、vy=0、wz=0。")
+    args_cli.eval_reset = True
+    if args_cli.max_steps is None:
+        args_cli.max_steps = 400
+elif args_cli.num_envs is None:
+    args_cli.num_envs = 16
+if args_cli.max_steps is None:
+    args_cli.max_steps = 0
 if args_cli.task and "OdinDepth" in args_cli.task:
     args_cli.enable_cameras = True
 if args_cli.save_depth and not args_cli.save_dir:
@@ -411,6 +439,11 @@ def main() -> None:
         generator.seed = args_cli.seed
         env_cfg.scene.terrain.max_init_terrain_level = args_cli.terrain_level
         env_cfg.curriculum.terrain_levels = None
+    if args_cli.obstacle_benchmark:
+        env_cfg.scene.terrain.terrain_generator.seed = args_cli.seed
+        env_cfg.scene.terrain.terrain_generator.curriculum = True
+        env_cfg.scene.terrain.max_init_terrain_level = 0
+        env_cfg.curriculum.terrain_levels = None
     if args_cli.eval_reset:
         env_cfg.events.reset_base.params.update(
             pose_range={"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)},
@@ -435,6 +468,11 @@ def main() -> None:
 
     # ---- 环境 + 策略 ----
     env = gym.make(task, cfg=env_cfg).unwrapped
+    if args_cli.obstacle_benchmark:
+        terrain = env.scene.terrain
+        terrain.terrain_levels[:] = 0
+        terrain.env_origins[:] = terrain.terrain_origins[terrain.terrain_levels, terrain.terrain_types]
+        env.scene.env_origins[:] = terrain.env_origins
     if args_cli.terrain_level is not None:
         terrain = env.scene.terrain
         terrain.terrain_levels[:] = args_cli.terrain_level
@@ -450,7 +488,9 @@ def main() -> None:
             "checkpoint": ckpt, "task": task, "seed": args_cli.seed,
             "terrain_level": args_cli.terrain_level, "num_envs": env.num_envs,
             "eval_reset": args_cli.eval_reset, "settle_steps": args_cli.settle_steps,
-            "measure_steps": args_cli.measure_steps, "arguments": vars(args_cli),
+            "measure_steps": args_cli.measure_steps,
+            "obstacle_benchmark": args_cli.obstacle_benchmark,
+            "arguments": vars(args_cli),
         }, save_depth=args_cli.save_depth)
 
     if args_cli.export:
