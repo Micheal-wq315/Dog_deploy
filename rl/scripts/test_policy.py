@@ -278,6 +278,10 @@ def run_continuous(env, wrapped, policy) -> None:
                 # UDP 桥: 后 3 维是姿态/高度指令
                 hold_posture(env, cmd[3:6].tolist())
                 cmd = cmd[:3]
+            elif "base_posture" in env.command_manager.active_terms:
+                # 键盘/手柄只有 x/y/wz, 没有姿态通道 —— 把姿态指令钉 0,
+                # 否则会按随机采样给出 pitch/roll/height, 驾驶时机器人会莫名倾斜/升降
+                hold_posture(env, (0.0, 0.0, 0.0))
             cmd[0] = cmd[0].clamp(*CMD_VX_RANGE)
             cmd[1] = cmd[1].clamp(*CMD_VY_RANGE)
             cmd[2] = cmd[2].clamp(*CMD_WZ_RANGE)
@@ -313,6 +317,9 @@ def run_sweep(env, wrapped, policy) -> None:
     print("-" * len(header))
     for cmd in SWEEP_COMMANDS:
         deaths = 0
+        # 姿态/高度指令钉 0: 这一轮测的是**速度**跟踪, 随机的姿态指令会干扰读数
+        if "base_posture" in env.command_manager.active_terms:
+            hold_posture(env, (0.0, 0.0, 0.0))
         for _ in range(args_cli.settle_steps):
             hold_command(env, cmd)
             _, n_done = step_once(env, wrapped, policy)
@@ -320,6 +327,8 @@ def run_sweep(env, wrapped, policy) -> None:
         acc = {k: 0.0 for k in ("err_lin", "err_yaw", "tilt_deg", "height", "slip", "vx", "vy", "wz")}
         for _ in range(args_cli.measure_steps):
             hold_command(env, cmd)
+            if "base_posture" in env.command_manager.active_terms:
+                hold_posture(env, (0.0, 0.0, 0.0))
             _, n_done = step_once(env, wrapped, policy)
             deaths += n_done
             m = read_metrics(env)
