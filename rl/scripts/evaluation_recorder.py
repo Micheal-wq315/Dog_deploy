@@ -9,6 +9,9 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+
+from rp_wd_rl.tasks.locomotion.velocity.mdp.terrain import terrain_height_under_root
 
 
 def setup_plotting():
@@ -27,12 +30,13 @@ def setup_plotting():
 class EvaluationRecorder:
     """采样转移前状态，终止标记对应接下来一步，避免读取自动重置后的假终止姿态。"""
 
-    def __init__(self, directory, env, metadata):
+    def __init__(self, directory, env, metadata, save_depth=False):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         if (self.directory / "samples.csv").exists():
             raise FileExistsError(f"已有测试数据，请换一个 --save-dir: {self.directory}")
         self.metadata = metadata
+        self.save_depth = save_depth
         self.metadata.update(created_at=datetime.now().astimezone().isoformat(), step_dt=env.step_dt)
         self.metadata["notes"] = [
             "状态在物理转移前采样，终止原因来自随后的转移；可能多个原因同时触发。",
@@ -52,11 +56,13 @@ class EvaluationRecorder:
                 index = int(np.searchsorted(cumulative, (col + .5) / generator.num_cols))
                 self.names[col] = cfgs[index][0]
         self.metadata["terrain_columns"] = self.names
+        if save_depth:
+            (self.directory / "depth_frames").mkdir(exist_ok=True)
         self.term_names = list(env.termination_manager.active_terms)
         self.leg_ids = [i for i, name in enumerate(env.scene["robot"].joint_names) if "FOOT" not in name]
         self.wheel_ids = [i for i, name in enumerate(env.scene["robot"].joint_names) if "FOOT" in name]
         self.columns = ["cmd_vx", "cmd_vy", "cmd_wz", "vx", "vy", "wz", "error_xy", "error_yaw",
-                        "tilt_deg", "world_height_m", "origin_height_m", "leg_torque_peak_nm",
+                        "tilt_deg", "world_height_m", "ground_height_m", "root_clearance_m", "origin_height_m", "leg_torque_peak_nm",
                         "wheel_torque_peak_nm", "distance_origin_m", "speed_xy", "terrain_level", "terrain_column"]
         self.file = (self.directory / "samples.csv").open("w", newline="")
         self.writer = csv.DictWriter(self.file, fieldnames=[
@@ -75,12 +81,14 @@ class EvaluationRecorder:
         vel = robot.root_lin_vel_b
         omega = robot.root_ang_vel_b
         terrain = env.scene.terrain
+        ground_height = terrain_height_under_root(env)
         zeros = torch.zeros(env.num_envs, device=env.device)
         values = torch.stack([
             cmd[:, 0], cmd[:, 1], cmd[:, 2], vel[:, 0], vel[:, 1], omega[:, 2],
             torch.linalg.vector_norm(cmd[:, :2] - vel[:, :2], dim=1), (cmd[:, 2] - omega[:, 2]).abs(),
             torch.rad2deg(torch.acos((-robot.projected_gravity_b[:, 2]).clamp(-1, 1))),
-            robot.root_pos_w[:, 2], robot.root_pos_w[:, 2] - env.scene.env_origins[:, 2],
+            robot.root_pos_w[:, 2], ground_height, robot.root_pos_w[:, 2] - ground_height,
+            robot.root_pos_w[:, 2] - env.scene.env_origins[:, 2],
             robot.applied_torque[:, self.leg_ids].abs().amax(dim=1),
             robot.applied_torque[:, self.wheel_ids].abs().amax(dim=1),
             torch.linalg.vector_norm(robot.root_pos_w[:, :2] - env.scene.env_origins[:, :2], dim=1),
@@ -103,6 +111,36 @@ class EvaluationRecorder:
         self.step += 1
         if self.step % 100 == 0:
             self.file.flush()
+        if self.save_depth and self.step % 25 == 0:
+            self._save_depth_preview(env)
+
+    def _save_depth_preview(self, env):
+        """保存传感器原图及与策略相同网格尺寸的最近距离预览。"""
+        camera = env.scene.sensors.get("odin_depth_camera")
+        if camera is None:
+            raise RuntimeError("请求保存深度数据，但场景中没有 odin_depth_camera 传感器。")
+        depth = camera.data.output["distance_to_camera"]
+        if depth.ndim == 4:
+            depth = depth[..., 0]
+        raw = depth[0].detach().float().cpu().numpy()
+        valid = np.isfinite(raw) & (raw > 0.0)
+        clipped = np.where(valid, np.clip(raw, 0.2, 6.0), 6.0).astype(np.float32)
+        grid_m = -F.adaptive_max_pool2d(-torch.from_numpy(clipped)[None, None], (12, 16))[0, 0].numpy()
+        grid_norm = np.clip(grid_m / 6.0, 0.0, 1.0)
+        stem = f"depth_{self.step:06d}"
+        np.save(self.directory / "depth_frames" / f"{stem}.npy", raw)
+        np.save(self.directory / "depth_frames" / f"{stem}_grid12x16_m.npy", grid_m)
+        np.save(self.directory / "depth_frames" / f"{stem}_grid12x16_norm.npy", grid_norm)
+        plt = setup_plotting()
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4), layout="constrained")
+        for ax, image, title in ((axes[0], clipped, "Odin深度原图（米）"), (axes[1], grid_m, "策略前处理网格（12×16，米）")):
+            plot = ax.imshow(image, cmap="turbo", vmin=0.2, vmax=6.0, interpolation="nearest")
+            ax.set_title(title)
+            ax.set_axis_off()
+            fig.colorbar(plot, ax=ax, fraction=0.046, pad=0.04, label="米")
+        fig.suptitle(f"仿真步 {self.step} · 有效像素 {valid.mean():.1%}")
+        fig.savefig(self.directory / "depth_frames" / f"{stem}.png", dpi=140)
+        plt.close(fig)
 
     def finish(self, completed=False):
         self.file.flush()

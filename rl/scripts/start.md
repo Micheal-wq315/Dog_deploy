@@ -27,18 +27,20 @@
 ./rl/scripts/train.sh --resume                           # 从最新 checkpoint 续训
 ./rl/scripts/train.sh --resume --load_run 2026-10-11_11-35-05_rolling_v4 --checkpoint model_1500.pt
 
-# Odin1 深度避障 (默认 256 环境、总计 8000 iter、headless)
-./rl/scripts/train_odin_depth.sh --run_name odin1_v1
-# 续训到总目标 8000；checkpoint 使用指定 run 中的最新模型
-./rl/scripts/train_odin_depth.sh --resume --max_iterations 8000 --run_name odin1_curriculum8k
+# Odin1 深度感知 + 台阶课程 (默认 256 环境、总计 8000 iter、headless)
+./rl/scripts/train_odin_depth.sh --run_name odin1_no_torque_localheight_v1
+# 从同一配置的指定 run 续训到总目标 8000
+./rl/scripts/train_odin_depth.sh --resume --max_iterations 8000 --run_name odin1_no_torque_localheight_v1
 ```
 
 - 日志：`rl/logs/train_*.log`（训练 stdout）＋ `rl/logs/rsl_rl/<实验名>/<时间戳>_<run_name>/`（TensorBoard + checkpoint）
 - 训练期间**自动阻止系统休眠**（`systemd-inhibit`），夜间不会被冻死
 - 关键指标在 TensorBoard 里看 `Episode_Reward/*`（跟踪 vs 惩罚的配比）和 `Episode_Termination/*`
 - 深度相机使用离屏渲染；训练仍无 GUI，但比普通任务更占渲染资源
-- 深度课程：100–2400 轮扩展速度、1500–4000 轮扩展姿态、1200–5000 轮加入推扰；5600–6800 轮渐增腿部力矩惩罚
-- 地形最高等级按 0/1000/2500/4500/6000 轮解锁为 1/3/5/8/11；升级仍依赖实际行进表现，课程详见 `rl/CURRICULUM.md`
+- 新课程：约 200–3400 轮扩展速度、3000–5700 轮加入姿态/高度目标、4000–6000 轮渐入推扰
+- 地形最高等级按 0/2000/4000/6000/7000 轮解锁为 1/2/4/6/8；升级依赖实际行进表现，重点先学低台阶再逐步增加高度
+- 已移除所有电机力矩惩罚；12维腿部力矩观测仍保留，780维输入和16维动作接口不变
+- 高度奖励与低高度终止改用机身正下方地面射线，按实际地面评估站姿净空
 - `--max_iterations` 表示包含已完成轮数的总目标；续训恢复课程步数，从 checkpoint 下一轮开始
 
 ```bash
@@ -86,6 +88,11 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
   --save-dir rl/logs/evaluation/odin_test_level0
 # 去掉 --headless 可打开GUI；--terrain-level 2 可测试更高难度
 
+# 保存 Odin 深度原图、12×16策略网格及PNG预览（每25步，约0.5秒一帧）
+./rl/scripts/gui_test.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \\
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth/<run>/model_7999.pt \\
+  --cmd 0.3 0 0 --save-dir rl/logs/evaluation/odin_depth_check --save-depth
+
 # 保存完整训练数据与训练曲线：不启动仿真，可在训练期间使用
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate isaaclab
@@ -95,7 +102,9 @@ python rl/scripts/plot_training.py \
 ```
 
 **测试数据**：`samples.csv` 保存每环境、每策略步的状态和终止原因；`summary.csv/json`
-只汇总测量阶段，`terrain_summary.json` 按地形类型汇总。`test_curves.png/svg` 为测试图，
+只汇总测量阶段，`terrain_summary.json` 按地形类型汇总。`--save-depth` 会生成 `depth_frames/`
+（原始深度 `.npy`、12×16米制网格、归一化网格及PNG并排预览）；CSV含脚下地面高度及机身净空。
+`test_curves.png/svg` 为测试图，
 `training_curves.png/svg` 为训练图。固定等级会启用按难度行生成地形，并将所有环境放到指定行；
 它是混合地形速度测试，不代表某一台阶高度的通过率。测试中的非超时终止与正常超时分别计数。
 

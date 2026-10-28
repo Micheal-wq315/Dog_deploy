@@ -185,30 +185,3 @@ def push_velocity_curriculum(
         cfg.params["velocity_range"] = ranges
         env.event_manager.set_term_cfg(term_name, cfg)
     return progress
-
-
-def late_reward_weight_ramp(
-    env: ManagerBasedRLEnv,
-    env_ids,
-    term_name: str = "dof_torques_l2",
-    start_step: int = 84_000,
-    ramp_steps: int = 12_000,
-    target_weight: float = -1.0e-5,
-    ramp_bins: int = 20,
-) -> float:
-    """在训练后段渐进开启力矩惩罚，按离散台阶降低每步配置更新开销.
-
-    默认 84k 策略步开始 (约 3500 PPO iter)，12k 步完成 ramp (约 500 iter，按
-    num_steps_per_env=24)。目标权重与现有力矩惩罚量级一致。
-    """
-    step = env.common_step_counter
-    progress = min(1.0, max(0.0, (step - start_step) / max(ramp_steps, 1)))
-    if progress < 1.0 and ramp_bins > 0:
-        progress = int(progress * ramp_bins) / ramp_bins
-    weight = target_weight * progress
-
-    cfg = env.reward_manager.get_term_cfg(term_name)
-    if abs(cfg.weight - weight) > 1.0e-12:
-        cfg.weight = weight
-        env.reward_manager.set_term_cfg(term_name, cfg)
-    return progress

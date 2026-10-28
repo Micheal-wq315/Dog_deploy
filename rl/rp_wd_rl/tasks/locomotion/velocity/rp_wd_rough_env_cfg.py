@@ -18,11 +18,12 @@ import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.utils import configclass
 
 from . import mdp
-from .rp_wd_env_cfg import RPWDFlatEnvCfg
+from .rp_wd_env_cfg import RPWDFlatEnvCfg, SceneCfg
 
 ##
 # 地形配方 (轮足专用)
@@ -105,8 +106,25 @@ RPWD_ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
 
 
 @configclass
+class RPWDRoughSceneCfg(SceneCfg):
+    """崎岖地形场景，并用一条向下射线测量机身下方地面高度。"""
+
+    height_scanner = RayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base_link",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 2.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=(0.0, 0.0)),
+        update_period=0.02,
+        mesh_prim_paths=["/World/ground"],
+        debug_vis=False,
+    )
+
+
+@configclass
 class RPWDRoughEnvCfg(RPWDFlatEnvCfg):
     """崎岖地形 (训练): 相对平地版只改三处 —— 地形、地形课程、5 项奖励权重."""
+
+    scene: RPWDRoughSceneCfg = RPWDRoughSceneCfg(num_envs=2048, env_spacing=2.5)
 
     def __post_init__(self):
         super().__post_init__()
@@ -140,8 +158,9 @@ class RPWDRoughEnvCfg(RPWDFlatEnvCfg):
         self.rewards.wheel_rolling_slip.weight = -2.5
         # 坡上姿态本身就难跟 (指令 pitch/roll 叠加坡面倾角), 跟踪权重略降
         self.rewards.attitude_track_exp.weight = 0.4
-        # 坡上"绝对高度"跟踪意义弱 (地形起伏), 高度跟踪权重降到 0.2
-        self.rewards.height_track_exp.weight = 0.2
+        # 以机身下方的本地地面为基准跟踪站姿高度，防止机器人长期蹲低
+        self.rewards.height_track_exp.weight = 0.8
+        self.rewards.height_track_exp.params["std"] = 0.10
         # 台阶上四轮同时着地比例天然下降, 别把爬台阶罚亏
         self.rewards.all_wheels_contact.weight = 0.3
         # 爬阶时小腿(KENN)蹭地是合法的, 阈值 1 N -> 5 N

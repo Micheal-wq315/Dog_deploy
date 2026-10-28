@@ -17,8 +17,8 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from rp_wd_rl.assets.rp_wd_contract import ODIN_DEPTH_IMAGE_SIZE
 
 from . import mdp
-from .rp_wd_env_cfg import ObservationsCfg, SceneCfg
-from .rp_wd_rough_env_cfg import RPWD_ROUGH_TERRAINS_CFG, RPWDRoughEnvCfg
+from .rp_wd_env_cfg import ObservationsCfg
+from .rp_wd_rough_env_cfg import RPWD_ROUGH_TERRAINS_CFG, RPWDRoughEnvCfg, RPWDRoughSceneCfg
 
 
 def curriculum_random_rough_terrain(difficulty, cfg):
@@ -47,7 +47,7 @@ _rough_cfg.function = curriculum_random_rough_terrain
 _rough_cfg.noise_range = (0.005, 0.055)  # difficulty 对应的振幅上下限；wrapper 转成 ±振幅
 _rough_cfg.noise_step = 0.005
 RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains["obstacle_boxes"] = terrain_gen.MeshRepeatedBoxesTerrainCfg(
-    proportion=0.18,
+    proportion=0.20,
     object_params_start=terrain_gen.MeshRepeatedBoxesTerrainCfg.ObjectCfg(
         num_objects=1,
         height=0.08,  # mesh box 以地面为中心，可见高度约 4 cm 起步
@@ -64,10 +64,20 @@ RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains["obstacle_boxes"] = terrain_gen.MeshRe
     # 给中心出生平台一个很小的非零厚度，避免生成退化的零厚度碰撞盒。
     platform_height=0.05,
 )
+# 重点训练上/下台阶，同时保留足量障碍、方格和坡地。
+for _name, _proportion in {
+    "pyramid_stairs": 0.23,
+    "pyramid_stairs_inv": 0.23,
+    "boxes": 0.12,
+    "random_rough": 0.10,
+    "hf_pyramid_slope": 0.06,
+    "hf_pyramid_slope_inv": 0.06,
+}.items():
+    RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains[_name].proportion = _proportion
 
 
 @configclass
-class RPWDOdinDepthSceneCfg(SceneCfg):
+class RPWDOdinDepthSceneCfg(RPWDRoughSceneCfg):
     """rough 地形场景 + 前向 Odin1 仿真深度相机."""
 
     odin_depth_camera: TiledCameraCfg = TiledCameraCfg(
@@ -130,7 +140,7 @@ class RPWDOdinDepthObservationsCfg(ObservationsCfg):
 
 @configclass
 class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
-    """Odin1 深度策略: 256 env，8000 iter，地形与任务难度逐阶段解锁。"""
+    """Odin1 深度策略: 256环境，先稳住运动再逐步增加地形与姿态难度。"""
 
     scene: RPWDOdinDepthSceneCfg = RPWDOdinDepthSceneCfg(num_envs=256, env_spacing=2.5)
     observations: RPWDOdinDepthObservationsCfg = RPWDOdinDepthObservationsCfg()
@@ -147,39 +157,24 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
         self.sim.physics_material = self.scene.terrain.physics_material
 
         self.curriculum.terrain_levels.params["max_level_schedule"] = (
-            (0, 1), (24_000, 3), (60_000, 5), (108_000, 8), (144_000, 11)
-        )  # 0 / 1000 / 2500 / 4500 / 6000 iter；成功升级、失败降级
+            (0, 1), (48_000, 2), (96_000, 4), (144_000, 6), (168_000, 8)
+        )  # 0 / 2000 / 4000 / 6000 / 7000 iter；由行走能力决定是否升级
         self.curriculum.command_lin_vel.params.update(
-            start_scale=0.2, end_scale=1.0, warmup_steps=2_400,
-            ramp_steps=55_200, ramp_angular=True,
-        )  # 100–2400 iter: ±0.12 → ±0.6 m/s，±0.2 → ±1 rad/s
+            start_scale=0.2, end_scale=1.0, warmup_steps=4_800,
+            ramp_steps=76_800, ramp_angular=True,
+        )  # 200–3400 iter: 速度/转向从小到契约范围
         self.curriculum.posture_command.params.update(
             start_scale=0.0, end_scale=1.0,
-            warmup_steps=36_000, ramp_steps=60_000,
-        )  # 1500–4000 iter: 姿态与高度指令逐步达到完整范围
+            warmup_steps=72_000, ramp_steps=64_800,
+        )  # 3000–5700 iter: 先学移动，再逐渐学习姿态与高度
         self.events.push_robot.params["velocity_range"] = {
             "x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)
         }
         self.curriculum.push_curriculum = CurrTerm(
             func=mdp.push_velocity_curriculum,
-            params={"start_step": 28_800, "ramp_steps": 91_200},
-        )  # 1200–5000 iter: 周期推扰从零渐增
-
-        # 后 30% 训练渐进加入节能约束，保留最后 1200 iter 稳定巩固。
-        self.rewards.dof_torques_l2.weight = 0.0
-        self.rewards.dof_torques_l2.params["asset_cfg"] = SceneEntityCfg(
-            "robot", joint_names=[".*_ABAD_JOINT", ".*_HIP_JOINT", ".*_KENN_JOINT"]
+            params={"start_step": 96_000, "ramp_steps": 48_000},
         )
-        self.curriculum.leg_torque_penalty = CurrTerm(
-            func=mdp.late_reward_weight_ramp,
-            params={
-                "term_name": "dof_torques_l2",
-                "start_step": 134_400,  # 5600 iter × 24 rollout steps
-                "ramp_steps": 28_800,   # 1200 iter，6800 iter 达到目标
-                "target_weight": -1.0e-5,
-                "ramp_bins": 20,
-            },
-        )
+        self.rewards.height_track_exp.weight = 1.0
 
 
 @configclass
@@ -212,5 +207,4 @@ class RPWDOdinDepthEnvCfg_PLAY(RPWDOdinDepthEnvCfg):
         self.curriculum.command_lin_vel = None
         self.curriculum.posture_command = None
         self.curriculum.push_curriculum = None
-        self.curriculum.leg_torque_penalty = None
         self.commands.base_velocity.rel_standing_envs = 0.0

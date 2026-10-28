@@ -29,6 +29,7 @@ parser = argparse.ArgumentParser(description="Test the latest RP_wd policy.")
 parser.add_argument("--task", type=str, default=None, help="显式指定任务；深度模型使用 OdinDepth-Play 任务。")
 parser.add_argument("--seed", type=int, default=42, help="测试随机种子。")
 parser.add_argument("--save-dir", type=str, default=None, help="保存逐环境 CSV、汇总、测试图和配置。")
+parser.add_argument("--save-depth", action="store_true", help="每0.5秒保存一张原始深度图及12×16网格预览；需要 --save-dir。")
 parser.add_argument("--eval-reset", action="store_true", help="固定出生朝向、零初速度，便于重复测试。")
 parser.add_argument(
     "--cmd", type=float, nargs=3, default=None, metavar=("VX", "VY", "WZ"),
@@ -62,6 +63,10 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 if args_cli.task and "OdinDepth" in args_cli.task:
     args_cli.enable_cameras = True
+if args_cli.save_depth and not args_cli.save_dir:
+    parser.error("--save-depth 需要同时指定 --save-dir。")
+if args_cli.save_depth and (not args_cli.task or "OdinDepth" not in args_cli.task):
+    parser.error("--save-depth 仅适用于 OdinDepth 任务，请显式指定 --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0。")
 if args_cli.num_envs < 1 or args_cli.measure_steps < 1 or args_cli.settle_steps < 0:
     parser.error("环境数和测量步数必须大于0，稳定步数不能小于0。")
 if args_cli.real_time is None:
@@ -446,7 +451,7 @@ def main() -> None:
             "terrain_level": args_cli.terrain_level, "num_envs": env.num_envs,
             "eval_reset": args_cli.eval_reset, "settle_steps": args_cli.settle_steps,
             "measure_steps": args_cli.measure_steps, "arguments": vars(args_cli),
-        })
+        }, save_depth=args_cli.save_depth)
 
     if args_cli.export:
         output_name = "policy_odin_depth.onnx" if "OdinDepth" in task else "policy_flat.onnx"

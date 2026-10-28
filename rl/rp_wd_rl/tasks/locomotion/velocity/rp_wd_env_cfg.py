@@ -361,9 +361,6 @@ class RewardsCfg:
         weight=0.4,
         params={"command_name": "base_posture", "std": 0.04, "asset_cfg": SceneEntityCfg("robot")},
     )
-    dof_torques_l2 = RewTerm(
-        func=mdp.joint_torques_l2, weight=-1.0e-5, params={"asset_cfg": SceneEntityCfg("robot")}
-    )
     dof_acc_l2 = RewTerm(
         func=mdp.joint_acc_l2, weight=-5.0e-8, params={"asset_cfg": SceneEntityCfg("robot")}
     )
@@ -389,12 +386,6 @@ class RewardsCfg:
         weight=-0.05,
         params={"command_name": "base_velocity", "asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINT_NAMES)},
     )
-    # 轮电机力矩: RS02 额定 6 N·m, 长时间大扭矩会过热
-    wheel_torque_l2 = RewTerm(
-        func=mdp.wheel_torque_l2,
-        weight=-1.0e-4,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINT_NAMES)},
-    )
     # ★ 必须"真的滚起来": 惩罚 轮速×半径 与 轮心实际速度 的失配.
     # 没有这一项时, 策略会收敛到"用轮子当脚跑小步"(实测: 着地轮数 2.36/4, 轮速仅应有的 1/3),
     # 冲击大且浪费轮子. 权重按"小跑步态约 -30/回合、纯滚动约 0、乱动截断在 -50/回合"标定.
@@ -405,6 +396,7 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot"),
             "wheel_joint_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINT_NAMES),
             "wheel_body_cfg": SceneEntityCfg("robot", body_names=[".*_FOOT_LINK"]),
+            "contact_sensor_cfg": SceneEntityCfg("contact_forces", body_names=[".*_FOOT_LINK"]),
         },
     )
     # 四个轮子同时着地 (滚动前进的必然结果): 满额 +10/回合
@@ -479,8 +471,6 @@ class CurriculumCfg:
     terrain_levels: CurrTerm | None = None
     # 深度课程任务中后段加入的周期推扰课程
     push_curriculum: CurrTerm | None = None
-    # Odin1 感知课程版使用: 后期渐进开启腿部力矩惩罚
-    leg_torque_penalty: CurrTerm | None = None
 
 
 ##

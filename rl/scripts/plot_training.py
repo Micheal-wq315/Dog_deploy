@@ -71,7 +71,7 @@ def main():
                 cap.step(*zip(*points), where="post", ls="--", color="gray", label="保存配置中的允许上限")
                 cap.set_ylabel("允许上限", color="gray")
                 cap.legend(loc="upper right")
-    for tag, label in [("command_lin_vel", "速度"), ("posture_command", "姿态/高度"), ("push_curriculum", "推扰"), ("leg_torque_penalty", "腿部力矩惩罚")]:
+    for tag, label in [("command_lin_vel", "速度"), ("posture_command", "姿态/高度"), ("push_curriculum", "推扰")]:
         line(axes[1, 1], "Curriculum/" + tag, label, 1)
     axes[1, 1].set_title("各项课程进度，相对最终幅度")
     for tag, label in [("track_lin_vel_xy_exp", "线速度"), ("track_ang_vel_z_exp", "偏航"), ("attitude_track_exp", "姿态"), ("height_track_exp", "高度")]:

@@ -9,6 +9,8 @@ from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 
+from .terrain import terrain_height_under_root
+
 
 def wheel_vel_l2(
     env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
@@ -47,6 +49,7 @@ def wheel_rolling_slip_l2(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     wheel_joint_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=[".*_FOOT_JOINT"]),
     wheel_body_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=[".*_FOOT_LINK"]),
+    contact_sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names=[".*_FOOT_LINK"]),
     wheel_radius: float = 0.1025,
     max_mismatch: float = 0.5,
 ) -> torch.Tensor:
@@ -59,7 +62,8 @@ def wheel_rolling_slip_l2(
     轮速只有应有值的 1/3. 小跑步态冲击大 (仿真的接触/冲击是最不准的部分, sim2real 风险最高),
     且完全浪费了轮子. 加入滚动失配惩罚后, 只有真正滚动才能低成本地拿到跟踪奖励.
 
-    `max_mismatch` 用来**截断**失配 (默认 0.5 m/s): 不然早期乱动时该项会大到形成悬崖,
+    仅惩罚接触地面的轮子，空中抬轮不再被当成打滑。`max_mismatch` 用来**截断**失配
+    (默认 0.5 m/s): 不然早期乱动时该项会大到形成悬崖,
     把探索直接压死.
     """
     robot: Articulation = env.scene[asset_cfg.name]
@@ -69,7 +73,11 @@ def wheel_rolling_slip_l2(
     quat = robot.data.root_quat_w.unsqueeze(1).expand(-1, v_w.shape[1], -1)
     v_forward = math_utils.quat_apply_inverse(quat, v_w)[..., 0]  # (N, 4)
     mismatch_sq = torch.square(omega - v_forward).clamp(max=max_mismatch * max_mismatch)
-    return mismatch_sq.mean(dim=1)
+    contact = env.scene.sensors[contact_sensor_cfg.name]
+    forces = contact.data.net_forces_w_history[:, :, contact_sensor_cfg.body_ids, :].norm(dim=-1)
+    on_ground = forces.amax(dim=1) > 1.0
+    weights = on_ground.to(mismatch_sq.dtype)
+    return (mismatch_sq * weights).sum(dim=1) / weights.sum(dim=1).clamp(min=1.0)
 
 
 def wheels_in_contact_frac(
@@ -87,13 +95,6 @@ def wheels_in_contact_frac(
     in_contact = forces.max(dim=1)[0] > threshold  # (N, num_bodies)
     return in_contact.float().mean(dim=1)
 
-
-def wheel_torque_l2(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
-) -> torch.Tensor:
-    """轮电机力矩平方和 — RS02 额定 6 N·m / 峰值 17 N·m, 抑制长时间大扭矩."""
-    asset: Articulation = env.scene[asset_cfg.name]
-    return torch.sum(torch.square(asset.data.applied_torque[:, asset_cfg.joint_ids]), dim=1)
 
 def _pitch_roll(asset: Articulation) -> tuple[torch.Tensor, torch.Tensor]:
     """由机体系投影重力反算 (pitch, roll), 与契约符号约定一致."""
@@ -144,13 +145,14 @@ def height_track_exp(
     std: float = 0.04,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    """机身高度跟踪奖励: exp(-(z - (STAND_HEIGHT + cmd_height))² / std²)."""
+    """机身相对脚下地面的高度跟踪奖励，避免地块世界z变化影响站姿。"""
     from rp_wd_rl.assets.rp_wd_contract import STAND_HEIGHT
 
     asset: Articulation = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
     target = STAND_HEIGHT + command[:, 2]
-    err_sq = torch.square(asset.data.root_pos_w[:, 2] - target)
+    height_above_ground = asset.data.root_pos_w[:, 2] - terrain_height_under_root(env)
+    err_sq = torch.square(height_above_ground - target)
     return torch.exp(-err_sq / std**2)
 
 
