@@ -60,17 +60,26 @@ class OdinCourseVelocityCommand(UniformVelocityCommand):
         self.max_nonfoot_force = torch.maximum(self.max_nonfoot_force, force)
         self._state_step = self._env.common_step_counter
 
+    def reset(self, env_ids=None):
+        # Isaac Lab先reset指令、后清零episode_length_buf，不能用步数识别新回合。
+        extras = super().reset(env_ids)
+        ids = torch.arange(self.num_envs, device=self.device) if env_ids is None else torch.as_tensor(
+            env_ids, device=self.device, dtype=torch.long
+        )
+        self.goal_w[ids] = self._env.scene.env_origins[ids]
+        self.goal_w[ids, 0] += self.cfg.goal_distance
+        self.previous_distance[ids] = torch.linalg.vector_norm(
+            self.goal_w[ids, :2] - self.robot.data.root_pos_w[ids, :2], dim=1
+        )
+        self.progress_speed[ids] = 0.0
+        self.max_nonfoot_force[ids] = 0.0
+        # 同步新指令，避免复位后首个观测携带上一地块的目标方向。
+        self._update_command()
+        return extras
+
     def _resample_command(self, env_ids):
         super()._resample_command(env_ids)
         ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
-        reset_ids = ids[self._env.episode_length_buf[ids] == 0]
-        self.goal_w[reset_ids] = self._env.scene.env_origins[reset_ids]
-        self.goal_w[reset_ids, 0] += self.cfg.goal_distance
-        self.previous_distance[reset_ids] = torch.linalg.vector_norm(
-            self.goal_w[reset_ids, :2] - self.robot.data.root_pos_w[reset_ids, :2], dim=1
-        )
-        self.progress_speed[reset_ids] = 0.0
-        self.max_nonfoot_force[reset_ids] = 0.0
         maximum = max(abs(v) for v in self.cfg.ranges.lin_vel_x)
         self.speed[ids] = torch.empty(len(ids), device=self.device).uniform_(0.6 * maximum, maximum)
         self.is_standing_env[ids[self.course_mask[ids]]] = False
@@ -162,11 +171,37 @@ def odin_goal_success(env):
     return env.termination_manager.get_term("goal_reached") & ~odin_failure(env)
 
 
-def odin_course_tracking(env, std: float = 0.35):
-    """专项赛道降低精确横向速度约束，给绕行留下空间；平地保持完整跟踪。"""
+def odin_course_tracking(env, std: float = 0.25):
+    """跨越赛道保留速度驱动；只在绕墙列放松直接跟踪。"""
     term = env.command_manager.get_term("base_velocity")
     error = (term.command[:, :2] - env.scene["robot"].data.root_lin_vel_b[:, :2]).square().sum(dim=1)
-    return torch.exp(-error / std**2) * torch.where(term.course_mask, 0.35, 1.0)
+    return torch.exp(-error / std**2) * torch.where(odin_bypass_mask(env), 0.35, 1.0)
+
+
+def odin_bypass_mask(env):
+    """只标识绕行墙，其他地形不应整体削弱速度跟踪。"""
+    terrain = env.scene.terrain
+    generator = terrain.cfg.terrain_generator
+    mask = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+    cfgs = list(generator.sub_terrains.values())
+    total = sum(cfg.proportion for cfg in cfgs)
+    cumulative = 0.0
+    column = (terrain.terrain_types.float() + 0.5) / generator.num_cols
+    for cfg in cfgs:
+        lower = cumulative / total
+        cumulative += cfg.proportion
+        if getattr(cfg, "course_kind", "manual") == "bypass":
+            mask |= (column >= lower) & (column < cumulative / total)
+    return mask
+
+
+def odin_joint_target_excess(env, asset_cfg: SceneEntityCfg):
+    """约束超出物理关节范围的无效位置目标，不对电机力矩加惩罚。"""
+    robot = env.scene[asset_cfg.name]
+    target = robot.data.joint_pos_target[:, asset_cfg.joint_ids]
+    limits = robot.data.joint_pos_limits[:, asset_cfg.joint_ids]
+    excess = (limits[..., 0] - target).clamp_min(0) + (target - limits[..., 1]).clamp_min(0)
+    return excess.square().mean(dim=1)
 
 
 def odin_course_yaw_tracking(env, std: float = 0.5):

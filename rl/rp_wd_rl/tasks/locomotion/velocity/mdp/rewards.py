@@ -138,6 +138,7 @@ def attitude_limit_l2(
     env: ManagerBasedRLEnv,
     limit: float = 0.1745,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    course_pitch_limit: float | None = None,
 ) -> torch.Tensor:
     """超出允许倾角的部分的 L2 惩罚 (默认 10°).
 
@@ -146,7 +147,13 @@ def attitude_limit_l2(
     """
     asset: Articulation = env.scene[asset_cfg.name]
     pitch, roll = _pitch_roll(asset)
-    over_p = torch.clamp(pitch.abs() - limit, min=0.0)
+    pitch_limit = limit
+    if course_pitch_limit is not None:
+        command = env.command_manager.get_term("base_velocity")
+        mask = getattr(command, "course_mask", None)
+        if mask is not None:
+            pitch_limit = torch.where(mask, course_pitch_limit, limit)
+    over_p = torch.clamp(pitch.abs() - pitch_limit, min=0.0)
     over_r = torch.clamp(roll.abs() - limit, min=0.0)
     return torch.square(over_p) + torch.square(over_r)
 

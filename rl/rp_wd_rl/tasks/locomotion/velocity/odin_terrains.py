@@ -27,10 +27,10 @@ def odin_course_terrain(difficulty, cfg):
     ))
     origin = np.array((0.8, size_y / 2, 0.0))
     h = cfg.step_height_range[0] + difficulty * (cfg.step_height_range[1] - cfg.step_height_range[0])
-    width = 0.50 - 0.12 * difficulty
+    width = 0.65 - 0.20 * difficulty
     if cfg.course_kind in ("stairs_up", "stairs_down"):
-        # 一回合跨越4级；每级为实体箱，避免高度场把立面插值为可滚的斜坡。
-        count = 4
+        # 先单级，再2/3/4级，避免最低难度也必须连续跨越4次。
+        count = 1 + int(round(3 * difficulty))
         start = 1.8
         if cfg.course_kind == "stairs_up":
             for i in range(count):

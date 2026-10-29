@@ -66,6 +66,23 @@ class BenchmarkTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 qualify([folder])
 
+    def test_early_gate_does_not_require_untrained_high_obstacles(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.json").write_text(json.dumps({"completed": True}))
+            report = {name: dict(first_attempts=2, first_completed_attempts=0,
+                                first_low_contact_completed_attempts=0) for name in CORE_SCENARIOS}
+            report["flat_reference"].update(first_completed_attempts=2, first_low_contact_completed_attempts=2)
+            (root / "terrain_summary.json").write_text(json.dumps(report))
+            self.assertTrue(qualify([root], scenarios=("flat_reference",))["passed"])
+            self.assertFalse(qualify([root])["passed"])
+            (root / "summary.json").write_text(json.dumps([{"case": "flat_reference", "vx": .13}]))
+            self.assertFalse(qualify([root], scenarios=("flat_reference",), min_flat_vx=.25)["passed"])
+            (root / "summary.json").write_text(json.dumps([{"case": "flat_reference", "vx": .30}]))
+            self.assertTrue(qualify([root], scenarios=("flat_reference",), min_flat_vx=.25)["passed"])
+            with self.assertRaises(ValueError):
+                qualify([root], scenarios=())
+
 
 if __name__ == "__main__":
     unittest.main()

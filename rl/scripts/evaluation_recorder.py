@@ -79,7 +79,9 @@ class EvaluationRecorder:
         self.columns = ["cmd_vx", "cmd_vy", "cmd_wz", "vx", "vy", "wz", "error_xy", "error_yaw",
                         "tilt_deg", "world_height_m", "ground_height_m", "root_clearance_m", "origin_height_m", "leg_torque_peak_nm",
                         "wheel_torque_peak_nm", "distance_origin_m", "forward_progress_m", "lateral_offset_m",
-                        "speed_xy", "nonfoot_force_peak_n", "wheel_force_peak_n", "terrain_level", "terrain_column"]
+                        "speed_xy", "nonfoot_force_peak_n", "wheel_force_peak_n",
+                        "leg_target_error_rms_rad", "leg_target_outside_fraction", "leg_pd_saturation_fraction",
+                        "terrain_level", "terrain_column"]
         self.file = (self.directory / "samples.csv").open("w", newline="")
         self.writer = csv.DictWriter(self.file, fieldnames=[
             "step", "time_s", "env_id", "episode_id", "case", "phase", "terrain_name", *self.columns,
@@ -115,6 +117,10 @@ class EvaluationRecorder:
             torch.linalg.vector_norm(vel[:, :2], dim=1),
             forces[:, :, self.nonfoot_ids].amax(dim=(1, 2)),
             forces[:, :, self.wheel_body_ids].amax(dim=(1, 2)),
+            (robot.joint_pos_target[:, self.leg_ids] - robot.joint_pos[:, self.leg_ids]).square().mean(dim=1).sqrt(),
+            ((robot.joint_pos_target[:, self.leg_ids] < robot.joint_pos_limits[:, self.leg_ids, 0]) |
+             (robot.joint_pos_target[:, self.leg_ids] > robot.joint_pos_limits[:, self.leg_ids, 1])).float().mean(dim=1),
+            (robot.applied_torque[:, self.leg_ids].abs() >= 40.0).float().mean(dim=1),
             getattr(terrain, "terrain_levels", zeros), getattr(terrain, "terrain_types", zeros),
         ], dim=1)
         return values.cpu().numpy()

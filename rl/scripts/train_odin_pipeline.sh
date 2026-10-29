@@ -15,14 +15,18 @@ for arg in "$@"; do
             exit 1 ;;
     esac
 done
-RUN_LABEL="odin_course_$(date +%Y%m%d_%H%M%S)"
+RUN_LABEL="odin_v18_$(date +%Y%m%d_%H%M%S)"
 
-"${SCRIPT_DIR}/train_odin_depth.sh" "$@" \
-    --task Isaac-Velocity-Rough-RPWD-OdinDepth-Teacher-v0 \
-    --max_iterations 8000 --run_name "${RUN_LABEL}"
+# 前1000轮先验平地；3000轮再验6cm上下阶。未达标就停，避免盲跑满8000轮。
+TEACHER_RESUME=()
+for TARGET in 1000 3000 8000; do
+    STAGE_LABEL="${RUN_LABEL}_teacher${TARGET}"
+    "${SCRIPT_DIR}/train_odin_depth.sh" "$@" \
+        --task Isaac-Velocity-Rough-RPWD-OdinDepth-Teacher-v0 \
+        --max_iterations "${TARGET}" --run_name "${STAGE_LABEL}" "${TEACHER_RESUME[@]}"
 
 # 只接受本次完整结束的教师记录，避免误拿旧实验或半写入的模型。
-TEACHER_CHECKPOINT="$(python - "${SCRIPT_DIR}/../logs/rsl_rl/rp_wd_odin_teacher" "${RUN_LABEL}" <<'PY'
+TEACHER_CHECKPOINT="$(python - "${SCRIPT_DIR}/../logs/rsl_rl/rp_wd_odin_teacher" "${STAGE_LABEL}" "${TARGET}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -30,12 +34,23 @@ records = list(Path(sys.argv[1]).glob(f"*_{sys.argv[2]}/training_result.json"))
 if len(records) != 1:
     raise SystemExit("没有本次完整教师训练记录，停止学生阶段。")
 result = json.loads(records[0].read_text())
-if result["completed_iterations"] != 8000 or not Path(result["checkpoint"]).is_file():
-    raise SystemExit("教师训练未达到8000轮，停止学生阶段。")
+if result["completed_iterations"] != int(sys.argv[3]) or not Path(result["checkpoint"]).is_file():
+    raise SystemExit("教师训练未达到本阶段目标，停止后续阶段。")
 print(result["checkpoint"])
 PY
 )"
 TEACHER_RUN_DIR="$(dirname "${TEACHER_CHECKPOINT}")"
+if [[ "${TARGET}" != 8000 ]]; then
+    STAGE_EVAL="${TEACHER_RUN_DIR}/stage_gate_seed42"
+    "${SCRIPT_DIR}/gui_test.sh" --obstacle-benchmark --headless \
+        --checkpoint "${TEACHER_CHECKPOINT}" --seed 42 --num_envs 12 --save-dir "${STAGE_EVAL}"
+    SCENARIOS=(flat_reference)
+    [[ "${TARGET}" == 3000 ]] && SCENARIOS+=(step_up_06cm step_down_08cm)
+    python "${SCRIPT_DIR}/qualify_odin_teacher.py" "${STAGE_EVAL}" \
+        --scenarios "${SCENARIOS[@]}" --output "${TEACHER_RUN_DIR}/stage_gate.json"
+fi
+TEACHER_RESUME=(--resume --load_run "${TEACHER_RUN_DIR}" --checkpoint "$(basename "${TEACHER_CHECKPOINT}")")
+done
 EVAL_DIRS=()
 for EVAL_SEED in 42 43 44; do
     EVAL_DIR="${TEACHER_RUN_DIR}/qualification_seed${EVAL_SEED}"

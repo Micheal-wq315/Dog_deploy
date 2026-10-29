@@ -7,7 +7,11 @@ import torch
 
 def verify_odin_design(check):
     from rp_wd_rl.tasks.locomotion.velocity.mdp.observations import odin_depth_memory
-    from rp_wd_rl.tasks.locomotion.velocity.mdp.odin_course import odin_safe_terrain_levels
+    from rp_wd_rl.tasks.locomotion.velocity.mdp.odin_course import (
+        OdinCourseVelocityCommand, odin_safe_terrain_levels, odin_joint_target_excess,
+    )
+    from isaaclab.envs.mdp.commands import UniformVelocityCommand
+    from unittest.mock import patch
     from rp_wd_rl.tasks.locomotion.velocity.odin_terrains import OdinCourseTerrainCfg, odin_course_terrain
     from benchmark_metrics import benchmark_attempt_metrics
     from rp_wd_rl.tasks.locomotion.velocity.mdp.rewards import _course_scale
@@ -15,6 +19,35 @@ def verify_odin_design(check):
         get_term=lambda name: SimpleNamespace(course_mask=torch.tensor([False, True]))))
     check("平地滚动约束保持全额，专项允许抬轮", torch.equal(
         _course_scale(scaling_env, torch.ones(2), .25), torch.tensor([1., .25])))
+
+    # 重现真实Manager顺序：command.reset执行时回合步数尚未清零。
+    command = object.__new__(OdinCourseVelocityCommand)
+    command._env = SimpleNamespace(num_envs=2, device="cpu",
+        episode_length_buf=torch.tensor([700, 1100]),
+        scene=SimpleNamespace(env_origins=torch.tensor([[12., 3., 0.], [6., 8., .2]])))
+    command.robot = SimpleNamespace(data=SimpleNamespace(root_pos_w=torch.tensor([[12., 3., .4], [6., 8., .6]])))
+    command.cfg = SimpleNamespace(goal_distance=4.4)
+    command.goal_w = torch.full((2, 3), -100.)
+    command.previous_distance = torch.tensor([999., 777.])
+    command.progress_speed = torch.tensor([8., 9.])
+    command.max_nonfoot_force = torch.tensor([300., 400.])
+    command._update_command = lambda: None
+    with patch.object(UniformVelocityCommand, "reset", return_value={}):
+        command.reset(torch.tensor([0]))
+        check("非零回合步数时复位仍刷新终点、距离和撞击峰值",
+              torch.allclose(command.goal_w[0], torch.tensor([16.4, 3., 0.]))
+              and abs(command.previous_distance[0].item() - 4.4) < 1e-5
+              and command.progress_speed[0] == 0 and command.max_nonfoot_force[0] == 0)
+        check("单环境复位保留其余环境的赛道状态",
+              command.previous_distance[1] == 777 and command.max_nonfoot_force[1] == 400)
+        command.reset()
+        check("全环境复位和部分复位采用相同初始化规则",
+              torch.allclose(command.previous_distance, torch.full((2,), 4.4)))
+    limits = torch.tensor([[[-1., 1.], [-2., 0.]]])
+    target_env = SimpleNamespace(scene={"robot": SimpleNamespace(data=SimpleNamespace(
+        joint_pos_target=torch.tensor([[2., -1.]]), joint_pos_limits=limits))})
+    check("无效目标约束只统计越过物理关节范围的部分", torch.allclose(
+        odin_joint_target_excess(target_env, SimpleNamespace(name="robot", joint_ids=[0, 1])), torch.tensor([.5])))
 
     camera = SimpleNamespace(frame=torch.zeros(2, dtype=torch.long), data=SimpleNamespace(
         output={"distance_to_image_plane": torch.full((2, 4, 6, 1), 0.3)}))
@@ -64,6 +97,9 @@ def verify_odin_design(check):
         top = max(mesh.vertices[:, 2].max() for mesh in meshes)
         check(f"{kind}困难端为4级×12cm实体台阶", abs(top - .48) < 1e-6 and all(mesh.is_watertight for mesh in meshes))
         check(f"{kind}出生平台高度正确", abs(origin[2] - (.48 if kind == "stairs_down" else 0.0)) < 1e-6)
+        easy, easy_origin = odin_course_terrain(0.0, cfg)
+        check(f"{kind}简单端仅一级1cm", abs(max(mesh.vertices[:, 2].max() for mesh in easy) - .01) < 1e-6
+              and abs(easy_origin[2] - (.01 if kind == "stairs_down" else 0.0)) < 1e-6)
 
     levels = torch.tensor([0, 0, 1, 1])
     terrain = SimpleNamespace(terrain_levels=levels, terrain_types=torch.zeros(4, dtype=torch.long),

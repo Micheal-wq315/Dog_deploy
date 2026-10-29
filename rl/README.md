@@ -123,6 +123,8 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 | 任务 ID | `Isaac-Velocity-Rough-RPWD-OdinDepth-v0` / `...-OdinDepth-Play-v0` |
 | ROS2 部署 | Odin1 官方深度图 → `odin_depth_adapter.launch.py` → `/odin1/depth_features` → `policy:=odin_depth` |
 
+v18修复跨回合终点/碰撞状态重置，新增无效位置目标约束（非力矩惩罚），地形从单级小台阶起步；1000/3000轮加入阶段验收，达标才继续。设计与失败证据见`CURRICULUM.md`。
+
 一键 headless 训练：`./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42`。
 用 `./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint <path>`
 做仿真回放并导出专属 ONNX。策略使用独立 CNN 编码8帧深度记忆；

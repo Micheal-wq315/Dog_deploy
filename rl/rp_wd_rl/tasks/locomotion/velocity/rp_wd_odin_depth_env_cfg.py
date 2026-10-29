@@ -222,38 +222,49 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
             params={"max_level_schedule": ((0, 0), (24_000, 2), (72_000, 5), (120_000, 8), (144_000, 11))},
         )
         self.curriculum.command_lin_vel.params.update(
-            start_scale=0.4, end_scale=1.0, warmup_steps=12_000,
-            ramp_steps=60_000, ramp_angular=True,
+            start_scale=0.6, end_scale=1.0, warmup_steps=24_000,
+            ramp_steps=72_000, ramp_angular=True,
         )
         self.curriculum.posture_command.params.update(
             start_scale=0.0, end_scale=1.0,
-            warmup_steps=72_000, ramp_steps=48_000,
+            warmup_steps=108_000, ramp_steps=48_000,
         )
         self.events.push_robot.params["velocity_range"] = {
             "x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)
         }
         self.curriculum.push_curriculum = CurrTerm(
             func=mdp.push_velocity_curriculum,
-            params={"start_step": 96_000, "ramp_steps": 36_000,
+            params={"start_step": 132_000, "ramp_steps": 36_000,
                     "max_push_x": 0.25, "max_push_y": 0.20, "max_push_z": 0.0},
         )
         self.rewards.track_lin_vel_xy_exp.func = mdp.odin_course_tracking
-        self.rewards.track_lin_vel_xy_exp.params = {"std": 0.35}
+        self.rewards.track_lin_vel_xy_exp.weight = 3.0
+        self.rewards.track_lin_vel_xy_exp.params = {"std": 0.25}
         self.rewards.track_ang_vel_z_exp.func = mdp.odin_course_yaw_tracking
         self.rewards.track_ang_vel_z_exp.params = {"std": 0.5}
-        self.rewards.goal_progress = RewTerm(func=mdp.odin_goal_progress, weight=2.0)
+        self.rewards.goal_progress = RewTerm(func=mdp.odin_goal_progress, weight=3.0)
         self.rewards.goal_success = RewTerm(func=mdp.odin_goal_success, weight=250.0)
         self.rewards.termination_penalty.func = mdp.odin_failure
         self.rewards.height_track_exp.weight = 1.0
         self.rewards.height_track_exp.params["std"] = 0.08
         self.rewards.attitude_track_exp.weight = 0.3
         self.rewards.attitude_limit_l2.weight = -2.0
-        self.rewards.all_wheels_contact.weight = 1.0
-        self.rewards.all_wheels_contact.params["course_scale"] = 0.1
+        self.rewards.attitude_limit_l2.params["course_pitch_limit"] = 0.3491
+        self.rewards.all_wheels_contact.weight = 0.3
+        self.rewards.all_wheels_contact.params["course_scale"] = 0.0
         self.rewards.leg_joint_vel_l2.weight = -5.0e-4
-        self.rewards.leg_joint_vel_l2.params["course_scale"] = 0.4
-        self.rewards.wheel_rolling_slip.weight = -10.0
-        self.rewards.wheel_rolling_slip.params["course_scale"] = 0.25
+        self.rewards.leg_joint_vel_l2.params["course_scale"] = 0.1
+        self.rewards.wheel_rolling_slip.weight = -2.5
+        self.rewards.wheel_rolling_slip.params["course_scale"] = 0.2
+        # 上台阶必须允许短时竖直运动；保留平顺约束，但不压制正常抬轮。
+        self.rewards.lin_vel_z_l2.weight = -0.2
+        self.rewards.action_rate_l2.weight = -0.002
+        self.rewards.joint_target_excess = RewTerm(
+            func=mdp.odin_joint_target_excess, weight=-5.0,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
+                ".*_ABAD_JOINT", ".*_HIP_JOINT", ".*_KENN_JOINT"
+            ])},
+        )
         self.rewards.undesired_contacts.weight = -0.3
         self.rewards.undesired_contacts.params["threshold"] = 8.0
         self.rewards.wheel_impact = RewTerm(
