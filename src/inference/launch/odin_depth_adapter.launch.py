@@ -13,6 +13,7 @@ def generate_launch_description():
             DeclareLaunchArgument("input_topic", default_value="/odin1/depth_img_competetion"),
             DeclareLaunchArgument("output_topic", default_value="/odin1/depth_features"),
             DeclareLaunchArgument("rotation_deg", default_value="90"),
+            DeclareLaunchArgument("memory_stride", default_value="3"),
             Node(
                 package="roboparty_inference",
                 executable="odin_depth_adapter.py",
@@ -25,6 +26,7 @@ def generate_launch_description():
                         "grid_width": 12,
                         "rotation_deg": ParameterValue(LaunchConfiguration("rotation_deg"), value_type=int),
                         "memory_frames": 8,
+                        "memory_stride": ParameterValue(LaunchConfiguration("memory_stride"), value_type=int),
                         "max_depth": 6.0,
                         "min_depth": 0.2,
                     }

@@ -127,15 +127,15 @@ OBS_NUM = sum(dim for _, dim in OBS_LAYOUT)  # 56 (includes cmd_posture:3)
 ONNX_INPUT_DIM = OBS_NUM * FRAME_STACK  # 168, existing non-perception policy
 ONNX_OUTPUT_DIM = NUM_JOINTS  # 16
 
-# Odin1 depth policy profile. The source image is rotated 90° CCW, reduced to a
-# portrait 16x12 range grid, and retained as an eight-frame camera-rate history.
-# Keep this profile separate so old 168-input checkpoints remain loadable.
+# Odin1独立深度策略：逆时针90°校正、16×12网格、22帧缓冲间隔3帧取8张。
+# 普通168维策略继续使用原配置；深度输出仍为独立1740维输入。
 LEG_TORQUE_SCALE = 1.0 / 42.0
 ODIN_DEPTH_IMAGE_SIZE = (160, 120)  # source image (width, height)
 ODIN_DEPTH_ROTATION_DEG = 90        # CCW; normalize the side-mounted sensor image to portrait
 ODIN_DEPTH_ROTATION_K = ODIN_DEPTH_ROTATION_DEG // 90
 ODIN_DEPTH_GRID_SIZE = (12, 16)     # corrected output (width, height)
-ODIN_DEPTH_MEMORY_FRAMES = 8        # about 0.47 s at Odin1's 15 Hz depth rate
+ODIN_DEPTH_MEMORY_FRAMES = 8        # 部署CNN的深度通道数
+ODIN_DEPTH_MEMORY_STRIDE = 3        # 保留22帧原始历史，抽8张；覆盖1.4秒，最新图仍每帧更新
 ODIN_DEPTH_FEATURE_DIM = ODIN_DEPTH_GRID_SIZE[0] * ODIN_DEPTH_GRID_SIZE[1]
 ODIN_DEPTH_MEMORY_FEATURE_DIM = ODIN_DEPTH_FEATURE_DIM * ODIN_DEPTH_MEMORY_FRAMES
 ODIN_DEPTH_OBS_LAYOUT = OBS_LAYOUT + (

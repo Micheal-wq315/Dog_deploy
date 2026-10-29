@@ -9,6 +9,7 @@ fi
 
 # shellcheck source=./_common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
+ensure_isaac_sim_idle
 
 set -- --task Isaac-Velocity-Rough-RPWD-OdinDepth-v0 --headless "$@"
 

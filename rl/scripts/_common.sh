@@ -8,6 +8,9 @@
 #   CONDA_ENV      conda 环境名 (默认 isaaclab)
 
 ISAACLAB_PATH="${ISAACLAB_PATH:-/media/rmer/data/IsaacLab}"
+if [[ "${TERM:-dumb}" == dumb ]]; then
+    export TERM=xterm-256color
+fi
 CONDA_SH="${CONDA_SH:-${HOME}/miniconda3/etc/profile.d/conda.sh}"
 CONDA_ENV="${CONDA_ENV:-isaaclab}"
 
@@ -25,3 +28,21 @@ if [[ "${CONDA_DEFAULT_ENV:-}" != "${CONDA_ENV}" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+ensure_isaac_sim_idle() {
+    python - <<'PY'
+from pathlib import Path
+active = []
+scripts = {"train.py", "test_policy.py", "play.py", "verify_contract.py"}
+for directory in Path("/proc").glob("[0-9]*"):
+    try:
+        argv = directory.joinpath("cmdline").read_bytes().decode(errors="replace").split("\0")
+        executable = Path(argv[0]).name
+        if executable == "kit" or ("python" in executable and any(Path(arg).name in scripts for arg in argv[1:])):
+            active.append((directory.name, " ".join(argv[:4])))
+    except (OSError, IndexError):
+        continue
+if active:
+    raise SystemExit("已有 Isaac Sim 实例，停止启动第二个实例：" + str(active))
+PY
+}

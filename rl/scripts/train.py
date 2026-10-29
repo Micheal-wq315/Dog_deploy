@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -35,6 +36,7 @@ parser.add_argument("--run_name", type=str, default=None, help="本次运行的�
 parser.add_argument("--resume", action="store_true", default=False, help="从 checkpoint 续训.")
 parser.add_argument("--load_run", type=str, default=None, help="要加载的 run 目录 (正则, 默认最新).")
 parser.add_argument("--checkpoint", type=str, default=None, help="要加载的模型文件名 (正则, 默认 model_.*.pt).")
+parser.add_argument("--teacher_checkpoint", type=str, default=None, help="学生在线蒸馏使用的 PPO 教师 checkpoint。")
 parser.add_argument("--logger", type=str, default=None, choices=["tensorboard", "wandb", "neptune"])
 parser.add_argument("--log_project_name", type=str, default=None, help="wandb/neptune 项目名.")
 AppLauncher.add_app_launcher_args(parser)
@@ -64,7 +66,8 @@ from datetime import datetime  # noqa: E402
 
 import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
-from rsl_rl.runners import OnPolicyRunner  # noqa: E402
+from rsl_rl.runners import OnPolicyRunner, DistillationRunner  # noqa: E402
+from policy_checkpoint import initialize_student  # noqa: E402
 
 from isaaclab.envs import ManagerBasedRLEnvCfg  # noqa: E402
 from isaaclab.utils.dict import print_dict  # noqa: E402
@@ -172,8 +175,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     start_time = time.time()
 
-    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    distillation = agent_cfg.class_name == "DistillationRunner"
+    runner_class = DistillationRunner if distillation else OnPolicyRunner
+    if distillation and not agent_cfg.resume and not args_cli.teacher_checkpoint:
+        raise ValueError("学生新训练需要 --teacher_checkpoint <本版本教师模型>。")
+    if args_cli.teacher_checkpoint and (not distillation or agent_cfg.resume):
+        raise ValueError("--teacher_checkpoint 只用于学生新训练；学生续训请使用 --resume。")
+    runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     runner.add_git_repo_to_log(__file__)
+    if args_cli.teacher_checkpoint:
+        initialize_student(runner, args_cli.teacher_checkpoint)
+        print(f"[INFO] 学生与教师权重已初始化: {args_cli.teacher_checkpoint}")
     if agent_cfg.resume:
         print(f"[INFO] 加载模型: {resume_path}")
         runner.load(resume_path)
@@ -199,6 +211,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
     runner.learn(num_learning_iterations=remaining_iterations, init_at_random_ep_len=True)
+
+    final_checkpoint = os.path.join(log_dir, f"model_{agent_cfg.max_iterations - 1}.pt")
+    if not os.path.isfile(final_checkpoint):
+        raise RuntimeError(f"训练返回但缺少最终 checkpoint: {final_checkpoint}")
+    with open(os.path.join(log_dir, "training_result.json"), "w", encoding="utf-8") as file:
+        json.dump({"task": args_cli.task, "completed_iterations": agent_cfg.max_iterations,
+                   "checkpoint": os.path.abspath(final_checkpoint)}, file, ensure_ascii=False, indent=2)
 
     print(f"Training time: {round(time.time() - start_time, 2)} seconds")
     env.close()

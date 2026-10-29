@@ -54,7 +54,7 @@ export ISAACLAB_PATH=/media/rmer/data/IsaacLab
 ./rl/scripts/train.sh --num_envs 4096 --max_iterations 5000 --run_name dr_v1
 
 # Odin1 深度避障策略 (独立 profile; headless 相机渲染; 默认 256 env / 8000 iter)
-./rl/scripts/train_odin_depth.sh --run_name odin1_v1
+./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
 
 # 2) 回放 (需要图形界面) + 导出 ONNX
 ./rl/scripts/play.sh
@@ -113,22 +113,22 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 |---|---|
 | ONNX | `policy_odin_depth.onnx`，输入 1740 (=68×3 + 8×16×12)，输出仍为 16 |
 | 本体观测 | 腿部力矩 12 维（仿真/实机均按 42 N·m 归一化），随其余 56 维观测堆叠3帧 |
-| 深度记忆 | 相机新帧到达时更新8帧历史（约0.47秒，旧→新），CNN输入为 `[8,16,12]` |
+| 深度记忆 | 相机新帧到达时更新22帧缓冲，间隔3帧抽8张（约1.4秒，旧→新），CNN输入为 `[8,16,12]` |
 | 图像方向/网格 | 原始160×120横图先逆时针旋转90°，生成16行×12列竖向最近距离网格，特征归一化到0..1 |
-| 深度增强 | 0.03 m 高斯噪声、1% 随机缺测、80–100% 随机裁切/缩放；相机新帧才进入记忆 |
+| 深度增强 | 学生渐入3cm噪声、1%缺测、回合固定95–100%裁切、偏差/尺度、连片遮挡、8%丢帧、0–2帧延迟；仅新图更新历史 |
 | 深度语义 | 仿真使用 `distance_to_image_plane`（光轴Z深度），与ROS深度图的米制/毫米制值对齐；驱动语义仍需实测确认 |
 | 仿真相机 | 前向 160×120、约 120°×90°、0.2–6 m；安装位姿是待实测标定的初始估值 |
-| 障碍课程 | 继承轮足 rough 地形、摩擦/质量/质心/执行器/关节/IMU/推力随机化，并增加箱体障碍 |
+| 障碍课程 | 实体上下4级台阶、矮障碍、45cm绕行墙、起伏/坡道＋平地自由控制；安全到点升级，物理随机化沿用rough |
 | 力矩处理 | 无电机力矩惩罚；12维腿部力矩只作为策略观测 |
 | 任务 ID | `Isaac-Velocity-Rough-RPWD-OdinDepth-v0` / `...-OdinDepth-Play-v0` |
 | ROS2 部署 | Odin1 官方深度图 → `odin_depth_adapter.launch.py` → `/odin1/depth_features` → `policy:=odin_depth` |
 
-一键 headless 训练：`./rl/scripts/train_odin_depth.sh --run_name odin1_v1`。
+一键 headless 训练：`./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42`。
 用 `./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint <path>`
 做仿真回放并导出专属 ONNX。策略使用独立 CNN 编码8帧深度记忆；
 导出时会把本体观测和深度历史展平成部署端单输入 ONNX。
 
-完整的 8000 轮分阶段课程、地形上限和续训规则见 [CURRICULUM.md](CURRICULUM.md)。
+推荐6000轮教师PPO＋2000轮学生在线蒸馏；教师、学生独立日志，test/play都能读取。完整的8000轮课程、目标奖励、接触约束和续训规则见 [CURRICULUM.md](CURRICULUM.md)。
 
 **最容易写错的两点**（都已在校验脚本里逐项检查）：
 
@@ -186,5 +186,5 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 - [ ] **轮力矩**：17 N·m 为 RS02 峰值，连续工作建议按额定 6 N·m 复核散热。
 - [ ] 部署端 `act_alpha=0.9` 的 EMA 在 400 Hz 控制线程上时间常数约 1.1 ms，训练侧未建模（影响可忽略）。
 - [ ] 关节零点误差目前只加在观测上（近似）；若要更严格，需要同时偏移动作目标。
-- [ ] 粗糙地形课程学习（当前只做平地）；若要做，需在部署端加入高程图观测（`attn_enc` 那套）。
+- [ ] Odin真实深度朝向/外参/深度语义标定；新课程完整训练与固定赛道多种子验收。粗糙地形与深度课程已经接入。
 ```

@@ -74,6 +74,7 @@ from rp_wd_rl.assets.rp_wd_contract import (  # noqa: E402
     ODIN_DEPTH_GRID_SIZE,
     ODIN_DEPTH_MEMORY_FEATURE_DIM,
     ODIN_DEPTH_MEMORY_FRAMES,
+    ODIN_DEPTH_MEMORY_STRIDE,
     ODIN_DEPTH_OBS_LAYOUT,
     ODIN_DEPTH_ONNX_INPUT_DIM,
     ODIN_DEPTH_ROTATION_DEG,
@@ -229,6 +230,23 @@ check(
 )
 
 # A6. PD 增益 (部署端 robot.yaml 是 URDF/电机顺序)
+# ROS适配器与仿真必须使用相同的稀疏取帧间隔；维度相同不等于时序语义相同。
+import ast
+from pathlib import Path
+adapter_source = Path(DEPLOY_ROBOT_YAML_PATH).parents[2] / "scripts" / "odin_depth_adapter.py"
+launch_source = adapter_source.parent.parent / "launch" / "odin_depth_adapter.launch.py"
+for source, call_name, keyword in ((adapter_source, "declare_parameter", False),
+                                   (launch_source, "DeclareLaunchArgument", True)):
+    found = None
+    for node in ast.walk(ast.parse(source.read_text())):
+        if not isinstance(node, ast.Call) or not node.args or not isinstance(node.args[0], ast.Constant):
+            continue
+        name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        if name == call_name and node.args[0].value == "memory_stride":
+            value = next(k.value for k in node.keywords if k.arg == "default_value") if keyword else node.args[1]
+            found = int(ast.literal_eval(value))
+    check(f"{source.name}稀疏历史间隔与训练一致", found == ODIN_DEPTH_MEMORY_STRIDE, str(found))
+
 with open(DEPLOY_ROBOT_YAML_PATH, "r", encoding="utf-8") as f:
     robot_yaml = yaml.safe_load(f)
 expected_kp_urdf = expand(STIFFNESS, URDF_JOINT_ORDER)
@@ -251,6 +269,8 @@ if not args_cli.no_sim:
     print("\n=== B. 运行时语义 (启动仿真) ===")
     import gymnasium as gym  # noqa: E402
     import torch  # noqa: E402
+    from verify_odin_design import verify_odin_design
+    verify_odin_design(check)
 
     import rp_wd_rl.tasks  # noqa: E402, F401
     from isaaclab_tasks.utils.parse_cfg import parse_env_cfg  # noqa: E402

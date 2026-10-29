@@ -12,6 +12,15 @@ from isaaclab.managers import SceneEntityCfg
 from .terrain import terrain_height_under_root
 
 
+def _course_scale(env, value, course_scale):
+    """平地保留稳定控制约束，专项地形按比例放松抬轮相关代价。"""
+    if course_scale is None:
+        return value
+    command = env.command_manager.get_term("base_velocity")
+    mask = getattr(command, "course_mask", None)
+    return value if mask is None else value * torch.where(mask, course_scale, 1.0)
+
+
 def wheel_vel_l2(
     env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
@@ -52,6 +61,7 @@ def wheel_rolling_slip_l2(
     contact_sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names=[".*_FOOT_LINK"]),
     wheel_radius: float = 0.1025,
     max_mismatch: float = 0.5,
+    course_scale: float | None = None,
 ) -> torch.Tensor:
     """轮子滚动失配: mean_i clamp((ω_i·r − v_i)²), v_i 为轮心沿机体 x 轴的实际速度.
 
@@ -77,13 +87,15 @@ def wheel_rolling_slip_l2(
     forces = contact.data.net_forces_w_history[:, :, contact_sensor_cfg.body_ids, :].norm(dim=-1)
     on_ground = forces.amax(dim=1) > 1.0
     weights = on_ground.to(mismatch_sq.dtype)
-    return (mismatch_sq * weights).sum(dim=1) / weights.sum(dim=1).clamp(min=1.0)
+    value = (mismatch_sq * weights).sum(dim=1) / weights.sum(dim=1).clamp(min=1.0)
+    return _course_scale(env, value, course_scale)
 
 
 def wheels_in_contact_frac(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names=[".*_FOOT_LINK"]),
     threshold: float = 1.0,
+    course_scale: float | None = None,
 ) -> torch.Tensor:
     """着地轮子的比例 (0..1) —— 四轮滚动前进时应当恒为 1.
 
@@ -93,7 +105,7 @@ def wheels_in_contact_frac(
     contact_sensor = env.scene.sensors[sensor_cfg.name]
     forces = contact_sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids, :].norm(dim=-1)
     in_contact = forces.max(dim=1)[0] > threshold  # (N, num_bodies)
-    return in_contact.float().mean(dim=1)
+    return _course_scale(env, in_contact.float().mean(dim=1), course_scale)
 
 
 def _pitch_roll(asset: Articulation) -> tuple[torch.Tensor, torch.Tensor]:
@@ -161,6 +173,7 @@ def leg_joint_vel_l2(
     asset_cfg: SceneEntityCfg = SceneEntityCfg(
         "robot", joint_names=[".*_ABAD_JOINT", ".*_HIP_JOINT", ".*_KENN_JOINT"]
     ),
+    course_scale: float | None = None,
 ) -> torch.Tensor:
     """腿部关节 (不含轮) 角速度平方和 —— 抑制"抬腿换位"式运动.
 
@@ -169,4 +182,4 @@ def leg_joint_vel_l2(
     惩罚腿部关节速度, 等于逼它"用轮子滚, 而不是用腿挪".
     """
     asset: Articulation = env.scene[asset_cfg.name]
-    return torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
+    return _course_scale(env, torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1), course_scale)

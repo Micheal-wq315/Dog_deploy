@@ -8,6 +8,9 @@ set -euo pipefail
 
 # shellcheck source=./_common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
+if [[ " $* " != *" --no-sim "* ]]; then
+    ensure_isaac_sim_idle
+fi
 
 VERIFY_LOG="$(mktemp "${TMPDIR:-/tmp}/rpwd-contract.XXXXXX.log")"
 trap 'rm -f "${VERIFY_LOG}"' EXIT

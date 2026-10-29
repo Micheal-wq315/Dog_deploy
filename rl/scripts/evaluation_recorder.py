@@ -11,6 +11,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from benchmark_metrics import benchmark_attempt_metrics
+
 from rp_wd_rl.assets.rp_wd_contract import (
     ODIN_DEPTH_GRID_SIZE,
     ODIN_DEPTH_ROTATION_K,
@@ -50,6 +52,8 @@ class EvaluationRecorder:
             "测试为确定性策略、混合地形速度扫描，不代表指定高度台阶的通过率。",
             "零指令阶段的低速不计入低速比例；有指令时速度低于0.05m/s仅作为低速线索。",
             "固定障碍基准的前进距离/停滞比例是通行能力线索；当前地形碰撞体合并为一个mesh，不能据此报告精确障碍碰撞率。",
+            "完成率按逐环境逐回合统计，要求越过完整障碍、回到中心±0.7m、终点净空≥30cm且倾角≤25°；低接触完成率额外要求完成前非足端合力峰值<20N。",
+            "测试时间耗尽而未到点的回合单独标记为unfinished_at_test_horizon；低接触指标无法区分障碍碰撞和地面碰撞。",
         ]
         terrain = env.scene.terrain
         generator = terrain.cfg.terrain_generator
@@ -65,15 +69,20 @@ class EvaluationRecorder:
         if save_depth:
             (self.directory / "depth_frames").mkdir(exist_ok=True)
         self.term_names = list(env.termination_manager.active_terms)
+        self.episodes = np.zeros(env.num_envs, dtype=np.int64)
+        self.nonfoot_ids, _ = env.scene["contact_forces"].find_bodies(
+            ["base_link", ".*_ABAD_LINK", ".*_HIP_LINK", ".*_KENN_LINK"]
+        )
+        self.wheel_body_ids, _ = env.scene["contact_forces"].find_bodies([".*_FOOT_LINK"])
         self.leg_ids = [i for i, name in enumerate(env.scene["robot"].joint_names) if "FOOT" not in name]
         self.wheel_ids = [i for i, name in enumerate(env.scene["robot"].joint_names) if "FOOT" in name]
         self.columns = ["cmd_vx", "cmd_vy", "cmd_wz", "vx", "vy", "wz", "error_xy", "error_yaw",
                         "tilt_deg", "world_height_m", "ground_height_m", "root_clearance_m", "origin_height_m", "leg_torque_peak_nm",
                         "wheel_torque_peak_nm", "distance_origin_m", "forward_progress_m", "lateral_offset_m",
-                        "speed_xy", "terrain_level", "terrain_column"]
+                        "speed_xy", "nonfoot_force_peak_n", "wheel_force_peak_n", "terrain_level", "terrain_column"]
         self.file = (self.directory / "samples.csv").open("w", newline="")
         self.writer = csv.DictWriter(self.file, fieldnames=[
-            "step", "time_s", "env_id", "case", "phase", "terrain_name", *self.columns,
+            "step", "time_s", "env_id", "episode_id", "case", "phase", "terrain_name", *self.columns,
             "terminated", "timeout", *["done_" + name for name in self.term_names],
         ])
         self.writer.writeheader()
@@ -91,6 +100,7 @@ class EvaluationRecorder:
         terrain = env.scene.terrain
         ground_height = terrain_height_under_root(env)
         zeros = torch.zeros(env.num_envs, device=env.device)
+        forces = env.scene["contact_forces"].data.net_forces_w_history.norm(dim=-1)
         values = torch.stack([
             cmd[:, 0], cmd[:, 1], cmd[:, 2], vel[:, 0], vel[:, 1], omega[:, 2],
             torch.linalg.vector_norm(cmd[:, :2] - vel[:, :2], dim=1), (cmd[:, 2] - omega[:, 2]).abs(),
@@ -103,6 +113,8 @@ class EvaluationRecorder:
             robot.root_pos_w[:, 0] - env.scene.env_origins[:, 0],
             robot.root_pos_w[:, 1] - env.scene.env_origins[:, 1],
             torch.linalg.vector_norm(vel[:, :2], dim=1),
+            forces[:, :, self.nonfoot_ids].amax(dim=(1, 2)),
+            forces[:, :, self.wheel_body_ids].amax(dim=(1, 2)),
             getattr(terrain, "terrain_levels", zeros), getattr(terrain, "terrain_types", zeros),
         ], dim=1)
         return values.cpu().numpy()
@@ -116,12 +128,14 @@ class EvaluationRecorder:
             if self.obstacle_benchmark:
                 case = terrain_name if self.case == "continuous" else f"{self.case}__{terrain_name}"
             entry = {"step": self.step, "time_s": self.step * env.step_dt,
-                     "env_id": i, "case": case, "phase": self.phase,
+                     "env_id": i, "episode_id": int(self.episodes[i]), "case": case, "phase": self.phase,
                      "terrain_name": terrain_name}
             entry.update(zip(self.columns, map(float, row)))
             entry.update(zip(["terminated", "timeout", *["done_" + name for name in self.term_names]], map(int, flags)))
             self.writer.writerow(entry)
             self.rows.append(entry)
+            if flags[0] or flags[1]:
+                self.episodes[i] += 1
         self.step += 1
         if self.step % 100 == 0:
             self.file.flush()
@@ -219,6 +233,7 @@ class EvaluationRecorder:
                 summary["stuck_frame_fraction"] = float(np.mean([
                     r["cmd_vx"] > 0.1 and r["vx"] < 0.05 for r in rows
                 ]))
+                summary.update(benchmark_attempt_metrics(rows))
             summaries.append(summary)
         with (self.directory / "summary.csv").open("w", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=list(summaries[0]))
@@ -246,6 +261,7 @@ class EvaluationRecorder:
                         r["cmd_vx"] > 0.1 and r["vx"] < 0.05 for r in rows
                     ])),
                 })
+                terrain_summary[name].update(benchmark_attempt_metrics(rows))
         (self.directory / "terrain_summary.json").write_text(json.dumps(terrain_summary, ensure_ascii=False, indent=2))
         self.plot(summaries)
         print(f"[INFO] 测试数据与图已保存: {self.directory}")

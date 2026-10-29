@@ -27,21 +27,24 @@
 ./rl/scripts/train.sh --resume                           # 从最新 checkpoint 续训
 ./rl/scripts/train.sh --resume --load_run 2026-10-11_11-35-05_rolling_v4 --checkpoint model_1500.pt
 
-# Odin1 深度感知 + 台阶课程 (默认 256 环境、总计 8000 iter、headless)
-./rl/scripts/train_odin_depth.sh --run_name odin1_no_torque_localheight_v1
-# 从同一配置的指定 run 续训到总目标 8000
-./rl/scripts/train_odin_depth.sh --resume --max_iterations 8000 --run_name odin1_no_torque_localheight_v1
+# Odin1 v16：6000轮清晰深度教师 → 三种子验收 → 2000轮含噪学生（共8000，headless）
+./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
+# 分阶段续训学生，到学生阶段总目标2000轮
+./rl/scripts/train_odin_depth.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Student-v0 \
+  --resume --load_run <学生run名> --max_iterations 2000
+# 直接PPO对照（8000轮，含深度增强）
+./rl/scripts/train_odin_depth.sh --run_name odin_course_direct_v16
 ```
 
 - 日志：`rl/logs/train_*.log`（训练 stdout）＋ `rl/logs/rsl_rl/<实验名>/<时间戳>_<run_name>/`（TensorBoard + checkpoint）
 - 训练期间**自动阻止系统休眠**（`systemd-inhibit`），夜间不会被冻死
 - 关键指标在 TensorBoard 里看 `Episode_Reward/*`（跟踪 vs 惩罚的配比）和 `Episode_Termination/*`
 - 深度相机使用离屏渲染；训练仍无 GUI，但比普通任务更占渲染资源
-- 新课程：约 200–3400 轮扩展速度、3000–5700 轮加入姿态/高度目标、4000–6000 轮渐入推扰
-- 地形最高等级按 0/2000/4000/6000/7000 轮解锁为 1/2/4/6/8；升级依赖实际行进表现，重点先学低台阶再逐步增加高度
+- 教师：500–3000轮扩展速度，3000–5000轮加入平地姿态/高度，4000–5500轮渐入小幅水平推扰；学生前1000轮渐入深度退化
+- 教师地形上限按0/1000/2500/4000/4500轮解锁0/2/5/8/11；到达终点且无严重非足端撞击才升级。完整设计见 [CURRICULUM.md](../CURRICULUM.md)
 - 已移除所有电机力矩惩罚；12维腿部力矩观测仍保留
 - OdinDepth 当前输入契约为1740→16（68×3本体/力矩 + 8×16×12深度记忆）；旧780维 checkpoint 不兼容，需新模型
-- 深度原图默认逆时针旋转90°，adapter维护8帧历史；实物方向相反时启动adapter时设 `rotation_deg:=270`
+- 深度原图默认逆时针旋转90°，adapter由22帧历史间隔3帧抽8张（约1.4秒）；旧1740维模型回放用`--depth-memory-stride 1`、ROS用`memory_stride:=1`。实物方向相反时启动adapter时设 `rotation_deg:=270`
 - 高度奖励与低高度终止改用机身正下方地面射线，按实际地面评估站姿净空
 - `--max_iterations` 表示包含已完成轮数的总目标；续训恢复课程步数，从 checkpoint 下一轮开始
 
@@ -79,12 +82,12 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 ./rl/scripts/test_policy.sh --export                     # 测试同时导出 ONNX
 
 # Odin1 深度策略 (训练完成后 GUI 回放并导出专属 ONNX)
-./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_7999.pt
+./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint rl/logs/rsl_rl/rp_wd_odin_student/<run>/model_1999.pt
 
 # Odin1 深度模型量化测试：9组范围内指令，保存CSV、JSON、PNG和SVG
 # 每次指定新的保存目录，已有 samples.csv 时会拒绝覆盖
 ./rl/scripts/gui_test.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \
-  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_7999.pt \
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_student/<run>/model_1999.pt \
   --terrain-level 0 --eval-reset --seed 42 --num_envs 12 --sweep \
   --settle_steps 50 --measure_steps 200 --headless \
   --save-dir rl/logs/evaluation/odin_test_level0
@@ -92,24 +95,24 @@ tensorboard --logdir rl/logs/rsl_rl/rp_wd_flat           # 曲线
 
 # 保存 Odin 原图、90°/270°方向候选、16×12策略网格及PNG预览（每25步，约0.5秒一帧）
 ./rl/scripts/gui_test.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \
-  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_7999.pt \
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_student/<run>/model_1999.pt \
   --cmd 0.3 0 0 --save-dir rl/logs/evaluation/odin_depth_check --save-depth
 
 # 固定场景基准：平地、6cm上阶、8cm下阶、12cm矮箱、45cm绕行墙、45cm交错障碍
-# 默认12环境、前进0.35m/s、400步；保存每场景深度图与CSV/JSON/曲线
+# 默认12环境、前进0.35m/s、1000步；保存每场景深度图与CSV/JSON/曲线
 ./rl/scripts/gui_test.sh --obstacle-benchmark \
-  --checkpoint rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run>/model_<iter>.pt \
+  --checkpoint rl/logs/rsl_rl/rp_wd_odin_student/<run>/model_<iter>.pt \
   --save-dir rl/logs/evaluation/odin_obstacle_benchmark --save-depth --headless
 
 # 保存完整训练数据与训练曲线：不启动仿真，可在训练期间使用
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate isaaclab
 python rl/scripts/plot_training.py \
-  --run rl/logs/rsl_rl/rp_wd_odin_depth_memory/<run> \
+  --run rl/logs/rsl_rl/rp_wd_odin_student/<run> \
   --output-dir rl/logs/evaluation/odin_training
 ```
 
-固定场景基准的 `terrain_summary.json` 按场景汇总前进进度、1.5m进度比例、停滞帧比例和非超时终止。进度是通行能力线索，不能直接当作“无碰撞通过率”：当前地形碰撞体合并为一个 mesh，无法把障碍碰撞与正常轮地接触精确分开。
+固定场景基准的 `terrain_summary.json` 记录逐回合完整完成率、非足端接触<20N的低接触完成率、未完成尾回合、停滞比例和轮端力P95。每个场景按越过最后障碍的距离阈值判定，不把1.5m靠近当成功；地形仍为合并mesh，非足端接触不能精确区分障碍与地面，不能报告精确障碍碰撞率。
 
 **测试数据**：`samples.csv` 保存每环境、每策略步的状态和终止原因；`summary.csv/json`
 只汇总测量阶段，`terrain_summary.json` 按地形类型汇总。`--save-depth` 会生成 `depth_frames/`
@@ -179,7 +182,7 @@ ros2 launch roboparty_inference inference.launch.py robot:=wheel_quad policy:=od
 ```
 
 深度策略输入为原有56维观测 + 12维归一化腿部力矩（共68维，堆叠3帧）+ 8×16×12深度记忆，
-ONNX 为1740→16。训练侧对深度加入0.03m高斯噪声、1%像素缺测和80–100%随机裁切；仿真与adapter
+ONNX 为1740→16。学生阶段对深度渐入3cm噪声、1%缺测、回合固定95–100%裁切、偏差/遮挡、丢帧和延迟；仿真与adapter
 都将160×120原图逆时针旋转90°，再按0.2–6m裁剪并生成16行×12列最近距离特征。实物朝向相反时将
 `rotation_deg`设为270。上机前用 `--save-depth` 检查原图/校正图/网格，并校准相机安装位姿。
 

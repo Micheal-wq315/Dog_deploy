@@ -5,10 +5,12 @@ from __future__ import annotations
 import copy
 
 import isaaclab.sim as sim_utils
-import isaaclab.terrains as terrain_gen
 import numpy as np
 import trimesh
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
@@ -24,8 +26,9 @@ from rp_wd_rl.assets.rp_wd_contract import (
 )
 
 from . import mdp
+from .odin_terrains import ODIN_COURSE_TERRAINS_CFG
 from .rp_wd_env_cfg import ObservationsCfg
-from .rp_wd_rough_env_cfg import RPWD_ROUGH_TERRAINS_CFG, RPWDRoughEnvCfg, RPWDRoughSceneCfg
+from .rp_wd_rough_env_cfg import RPWDRoughEnvCfg, RPWDRoughSceneCfg
 
 
 ODIN_BENCHMARK_SCENARIOS = (
@@ -84,59 +87,7 @@ class OdinBenchmarkTerrainCfg(SubTerrainBaseCfg):
     scenario: str = "flat_reference"
 
 
-def curriculum_random_rough_terrain(difficulty, cfg):
-    """官方 random_uniform 忽略 difficulty，这里让粗糙幅度随地形行逐级增加。"""
-    from isaaclab.terrains.height_field.hf_terrains import random_uniform_terrain
-
-    scaled_cfg = copy.deepcopy(cfg)
-    amplitude = cfg.noise_range[0] + difficulty * (cfg.noise_range[1] - cfg.noise_range[0])
-    scaled_cfg.noise_range = (-amplitude, amplitude)
-    return random_uniform_terrain(difficulty, scaled_cfg)
-
-
-# 在原轮足 rough 课程中加入独立随机箱体障碍，保留原地形配方并重新归一化占比。
-RPWD_ODIN_DEPTH_TERRAINS_CFG = copy.deepcopy(RPWD_ROUGH_TERRAINS_CFG)
-RPWD_ODIN_DEPTH_TERRAINS_CFG.num_rows = 12
-RPWD_ODIN_DEPTH_TERRAINS_CFG.num_cols = 12
-for _terrain_cfg in RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains.values():
-    _terrain_cfg.proportion *= 0.82
-for _name in ("pyramid_stairs", "pyramid_stairs_inv"):
-    RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains[_name].step_height_range = (0.01, 0.12)
-RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains["boxes"].grid_height_range = (0.01, 0.10)
-for _name in ("hf_pyramid_slope", "hf_pyramid_slope_inv"):
-    RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains[_name].slope_range = (0.0, 0.40)
-_rough_cfg = RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains["random_rough"]
-_rough_cfg.function = curriculum_random_rough_terrain
-_rough_cfg.noise_range = (0.005, 0.055)  # difficulty 对应的振幅上下限；wrapper 转成 ±振幅
-_rough_cfg.noise_step = 0.005
-RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains["obstacle_boxes"] = terrain_gen.MeshRepeatedBoxesTerrainCfg(
-    proportion=0.20,
-    object_params_start=terrain_gen.MeshRepeatedBoxesTerrainCfg.ObjectCfg(
-        num_objects=1,
-        height=0.08,  # mesh box 以地面为中心，可见高度约 4 cm 起步
-        size=(0.25, 0.25),
-        max_yx_angle=0.0,
-    ),
-    object_params_end=terrain_gen.MeshRepeatedBoxesTerrainCfg.ObjectCfg(
-        num_objects=8,
-        height=0.44,  # 可见约 22 cm，高箱体以绕行为主
-        size=(0.65, 0.55),
-        max_yx_angle=5.0,
-    ),
-    platform_width=1.6,
-    # 给中心出生平台一个很小的非零厚度，避免生成退化的零厚度碰撞盒。
-    platform_height=0.05,
-)
-# 重点训练上/下台阶，同时保留足量障碍、方格和坡地。
-for _name, _proportion in {
-    "pyramid_stairs": 0.23,
-    "pyramid_stairs_inv": 0.23,
-    "boxes": 0.12,
-    "random_rough": 0.10,
-    "hf_pyramid_slope": 0.06,
-    "hf_pyramid_slope_inv": 0.06,
-}.items():
-    RPWD_ODIN_DEPTH_TERRAINS_CFG.sub_terrains[_name].proportion = _proportion
+RPWD_ODIN_DEPTH_TERRAINS_CFG = ODIN_COURSE_TERRAINS_CFG
 
 
 @configclass
@@ -196,11 +147,16 @@ class RPWDOdinDepthObservationsCfg(ObservationsCfg):
                 "grid_size": (ODIN_DEPTH_GRID_SIZE[1], ODIN_DEPTH_GRID_SIZE[0]),
                 "noise_std": 0.03,
                 "dropout_prob": 0.01,
-                "crop_fraction_range": (0.80, 1.0),
+                "crop_fraction_range": (0.95, 1.0),
                 "random_crop": True,
                 "augmentation_warmup_steps": 12_000,
                 "augmentation_ramp_steps": 48_000,
                 "memory_frames": ODIN_DEPTH_MEMORY_FRAMES,
+                "episode_bias_m": 0.04,
+                "scale_error": 0.02,
+                "occlusion_prob": 0.30,
+                "packet_loss_prob": 0.08,
+                "max_latency_frames": 2,
             },
         )
 
@@ -210,8 +166,26 @@ class RPWDOdinDepthObservationsCfg(ObservationsCfg):
             self.flatten_history_dim = False
             self.concatenate_terms = True
 
+    @configclass
+    class TeacherDepthCfg(DepthMemoryCfg):
+        """同视野的清晰深度标签；教师没有学生无法观测的背后高程信息。"""
+
+        depth_memory = ObsTerm(
+            func=mdp.odin_depth_memory,
+            params={
+                "sensor_cfg": SceneEntityCfg("odin_depth_camera"),
+                "grid_size": (ODIN_DEPTH_GRID_SIZE[1], ODIN_DEPTH_GRID_SIZE[0]),
+                "memory_key": "teacher", "noise_std": 0.0,
+                "dropout_prob": 0.0, "random_crop": False,
+                "episode_bias_m": 0.0, "scale_error": 0.0,
+                "occlusion_prob": 0.0, "packet_loss_prob": 0.0,
+                "max_latency_frames": 0,
+            },
+        )
+
     policy: ObsGroup = PolicyCfg()
     depth_memory: ObsGroup = DepthMemoryCfg()
+    depth_teacher: ObsGroup = TeacherDepthCfg()
 
 
 @configclass
@@ -232,25 +206,101 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
         self.scene.terrain.max_init_terrain_level = 0
         self.sim.physics_material = self.scene.terrain.physics_material
 
-        self.curriculum.terrain_levels.params["max_level_schedule"] = (
-            (0, 1), (48_000, 2), (96_000, 4), (144_000, 6), (168_000, 8)
-        )  # 0 / 2000 / 4000 / 6000 / 7000 iter；由行走能力决定是否升级
+        self.episode_length_s = 30.0
+        # 8个物理步覆盖完整20ms策略间隔，避免漏掉前几个子步的台阶冲击。
+        self.scene.contact_forces.history_length = 8
+        self.commands.base_velocity = mdp.OdinCourseVelocityCommandCfg(
+            asset_name="robot", resampling_time_range=(8.0, 12.0),
+            rel_standing_envs=0.1, heading_command=False, debug_vis=False,
+            ranges=copy.deepcopy(self.commands.base_velocity.ranges),
+        )
+        self.commands.base_posture.zero_on_course = True
+        self.events.reset_base.func = mdp.reset_odin_course_root
+        self.events.depth_memory_reset = EventTerm(func=mdp.reset_odin_depth_memory, mode="reset")
+        self.curriculum.terrain_levels = CurrTerm(
+            func=mdp.odin_safe_terrain_levels,
+            params={"max_level_schedule": ((0, 0), (24_000, 2), (72_000, 5), (120_000, 8), (144_000, 11))},
+        )
         self.curriculum.command_lin_vel.params.update(
-            start_scale=0.2, end_scale=1.0, warmup_steps=4_800,
-            ramp_steps=76_800, ramp_angular=True,
-        )  # 200–3400 iter: 速度/转向从小到契约范围
+            start_scale=0.4, end_scale=1.0, warmup_steps=12_000,
+            ramp_steps=60_000, ramp_angular=True,
+        )
         self.curriculum.posture_command.params.update(
             start_scale=0.0, end_scale=1.0,
-            warmup_steps=72_000, ramp_steps=64_800,
-        )  # 3000–5700 iter: 先学移动，再逐渐学习姿态与高度
+            warmup_steps=72_000, ramp_steps=48_000,
+        )
         self.events.push_robot.params["velocity_range"] = {
             "x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)
         }
         self.curriculum.push_curriculum = CurrTerm(
             func=mdp.push_velocity_curriculum,
-            params={"start_step": 96_000, "ramp_steps": 48_000},
+            params={"start_step": 96_000, "ramp_steps": 36_000,
+                    "max_push_x": 0.25, "max_push_y": 0.20, "max_push_z": 0.0},
         )
+        self.rewards.track_lin_vel_xy_exp.func = mdp.odin_course_tracking
+        self.rewards.track_lin_vel_xy_exp.params = {"std": 0.35}
+        self.rewards.track_ang_vel_z_exp.func = mdp.odin_course_yaw_tracking
+        self.rewards.track_ang_vel_z_exp.params = {"std": 0.5}
+        self.rewards.goal_progress = RewTerm(func=mdp.odin_goal_progress, weight=2.0)
+        self.rewards.goal_success = RewTerm(func=mdp.odin_goal_success, weight=250.0)
+        self.rewards.termination_penalty.func = mdp.odin_failure
         self.rewards.height_track_exp.weight = 1.0
+        self.rewards.height_track_exp.params["std"] = 0.08
+        self.rewards.attitude_track_exp.weight = 0.3
+        self.rewards.attitude_limit_l2.weight = -2.0
+        self.rewards.all_wheels_contact.weight = 1.0
+        self.rewards.all_wheels_contact.params["course_scale"] = 0.1
+        self.rewards.leg_joint_vel_l2.weight = -5.0e-4
+        self.rewards.leg_joint_vel_l2.params["course_scale"] = 0.4
+        self.rewards.wheel_rolling_slip.weight = -10.0
+        self.rewards.wheel_rolling_slip.params["course_scale"] = 0.25
+        self.rewards.undesired_contacts.weight = -0.3
+        self.rewards.undesired_contacts.params["threshold"] = 8.0
+        self.rewards.wheel_impact = RewTerm(
+            func=mdp.contact_load_excess, weight=-0.5,
+            params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=[".*_FOOT_LINK"]),
+                    "threshold": 180.0, "scale": 180.0},
+        )
+        self.rewards.body_collision_load = RewTerm(
+            func=mdp.contact_load_excess, weight=-1.0,
+            params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=["base_link", ".*_ABAD_LINK", ".*_HIP_LINK", ".*_KENN_LINK"]),
+                    "threshold": 20.0, "scale": 100.0},
+        )
+        # 到点是终态，不做超时价值bootstrap；失败惩罚显式排除成功项。
+        self.terminations.goal_reached = DoneTerm(func=mdp.odin_goal_reached)
+        self.terminations.course_bounds = DoneTerm(func=mdp.odin_course_out_of_bounds)
+        self.terminations.root_height.params["minimum_height"] = 0.22
+
+
+@configclass
+class RPWDOdinDepthEnvCfg_TEACHER(RPWDOdinDepthEnvCfg):
+    """6000轮清晰深度 PPO 教师，先学运动和赛道通过。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.depth_memory.depth_memory.params.update(
+            noise_std=0.0, dropout_prob=0.0, random_crop=False,
+            episode_bias_m=0.0, scale_error=0.0, occlusion_prob=0.0,
+            packet_loss_prob=0.0, max_latency_frames=0,
+        )
+        self.curriculum.terrain_levels.params["max_level_schedule"] = (
+            (0, 0), (24_000, 2), (60_000, 5), (96_000, 8), (108_000, 11)
+        )
+
+
+@configclass
+class RPWDOdinDepthEnvCfg_STUDENT(RPWDOdinDepthEnvCfg):
+    """2000轮在线蒸馏，教师使用同视野清晰历史，学生使用退化深度。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.curriculum.terrain_levels.params["max_level_schedule"] = ((0, 11),)
+        self.curriculum.command_lin_vel.params.update(start_scale=1.0, end_scale=1.0)
+        self.curriculum.posture_command.params.update(start_scale=1.0, end_scale=1.0)
+        self.curriculum.push_curriculum.params.update(start_step=12_000, ramp_steps=12_000)
+        self.observations.depth_memory.depth_memory.params.update(
+            augmentation_warmup_steps=0, augmentation_ramp_steps=24_000,
+        )
 
 
 @configclass
@@ -259,6 +309,18 @@ class RPWDOdinDepthEnvCfg_PLAY(RPWDOdinDepthEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+        from isaaclab.envs.mdp.commands import UniformVelocityCommandCfg
+        self.commands.base_velocity = UniformVelocityCommandCfg(
+            asset_name="robot", resampling_time_range=(8.0, 12.0),
+            rel_standing_envs=0.0, heading_command=False, debug_vis=False,
+            ranges=copy.deepcopy(self.commands.base_velocity.ranges),
+        )
+        self.rewards.track_lin_vel_xy_exp.func = mdp.track_lin_vel_xy_exp
+        self.rewards.track_lin_vel_xy_exp.params = {"command_name": "base_velocity", "std": 0.35}
+        self.rewards.track_ang_vel_z_exp.func = mdp.track_ang_vel_z_exp
+        self.rewards.track_ang_vel_z_exp.params = {"command_name": "base_velocity", "std": 0.5}
+        self.rewards.goal_progress = self.rewards.goal_success = None
+        self.terminations.goal_reached = self.terminations.course_bounds = None
         self.scene.num_envs = 8
         self.observations.policy.enable_corruption = False
         self.observations.depth_memory.depth_memory.params.update(
@@ -266,6 +328,9 @@ class RPWDOdinDepthEnvCfg_PLAY(RPWDOdinDepthEnvCfg):
                 "noise_std": 0.0,
                 "dropout_prob": 0.0,
                 "random_crop": False,
+                "episode_bias_m": 0.0, "scale_error": 0.0,
+                "occlusion_prob": 0.0, "packet_loss_prob": 0.0,
+                "max_latency_frames": 0,
             }
         )
 
@@ -278,7 +343,7 @@ class RPWDOdinDepthEnvCfg_PLAY(RPWDOdinDepthEnvCfg):
         self.events.push_robot = None
 
         self.scene.terrain.max_init_terrain_level = 2
-        self.scene.terrain.terrain_generator.curriculum = False
+        self.scene.terrain.terrain_generator.curriculum = True
         self.curriculum.terrain_levels = None
         self.curriculum.command_lin_vel = None
         self.curriculum.posture_command = None

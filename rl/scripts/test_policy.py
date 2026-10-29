@@ -30,8 +30,9 @@ parser.add_argument("--task", type=str, default=None, help="显式指定任务�
 parser.add_argument("--seed", type=int, default=42, help="测试随机种子。")
 parser.add_argument("--save-dir", type=str, default=None, help="保存逐环境 CSV、汇总、测试图和配置。")
 parser.add_argument("--save-depth", action="store_true", help="每0.5秒保存原始图、旋转校正图及16×12网格；需要 --save-dir。")
+parser.add_argument("--depth-memory-stride", type=int, default=None, help="深度取帧间隔：v16为3，旧1740维模型用1。")
 parser.add_argument("--obstacle-benchmark", action="store_true",
-                    help="使用固定的平地/台阶/障碍场景，默认前进0.35m/s并运行400步。")
+                    help="使用固定的平地/台阶/障碍场景，默认前进0.35m/s并运行1000步。")
 parser.add_argument("--eval-reset", action="store_true", help="固定出生朝向、零初速度，便于重复测试。")
 parser.add_argument(
     "--cmd", type=float, nargs=3, default=None, metavar=("VX", "VY", "WZ"),
@@ -41,7 +42,7 @@ parser.add_argument("--sweep", action="store_true", default=False, help="自动�
 parser.add_argument("--checkpoint", type=str, default=None, help="模型文件 (.pt); 缺省用最新的.")
 parser.add_argument("--experiment_name", type=str, default=None, help="实验名 (定位日志目录).")
 parser.add_argument("--num_envs", type=int, default=None, help="并行环境数 (GUI 下建议 ≤32).")
-parser.add_argument("--max_steps", type=int, default=None, help="总步数上限 (默认测试常规模式不限步；固定基准400步).")
+parser.add_argument("--max_steps", type=int, default=None, help="总步数上限 (常规模式不限步；固定基准1000步).")
 parser.add_argument("--log_interval", type=int, default=25, help="每隔多少步打印一行指标 (25 步 = 0.5 s).")
 parser.add_argument("--train-dist", action="store_true", default=False, help="用训练配置 (含域随机化+观测噪声) 测鲁棒性.")
 parser.add_argument("--rough", action="store_true", default=False, help="在崎岖地形上测试/遥控 (随机地形).")
@@ -84,7 +85,7 @@ if args_cli.obstacle_benchmark:
         parser.error("固定基准需要正向直行指令：vx>0、vy=0、wz=0。")
     args_cli.eval_reset = True
     if args_cli.max_steps is None:
-        args_cli.max_steps = 400
+        args_cli.max_steps = 1000
 elif args_cli.num_envs is None:
     args_cli.num_envs = 16
 if args_cli.max_steps is None:
@@ -428,6 +429,10 @@ def main() -> None:
     agent_cfg = load_cfg_from_registry(task, "rsl_rl_cfg_entry_point")
 
     env_cfg.scene.num_envs = args_cli.num_envs
+    if args_cli.depth_memory_stride is not None:
+        if "OdinDepth" not in task or args_cli.depth_memory_stride < 1:
+            raise ValueError("--depth-memory-stride仅用于深度任务且必须大于0。")
+        env_cfg.observations.depth_memory.depth_memory.params["memory_stride"] = args_cli.depth_memory_stride
     env_cfg.seed = args_cli.seed
     agent_cfg.seed = args_cli.seed
     if args_cli.terrain_level is not None:
@@ -481,7 +486,8 @@ def main() -> None:
     wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
     wrapped.reset()
     runner = OnPolicyRunner(wrapped, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    runner.load(ckpt)
+    from policy_checkpoint import load_inference_checkpoint
+    load_inference_checkpoint(runner, ckpt)
     policy = runner.get_inference_policy(device=env.device)
     if args_cli.save_dir:
         env.evaluation_recorder = EvaluationRecorder(args_cli.save_dir, env, {

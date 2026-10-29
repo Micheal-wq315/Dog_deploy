@@ -38,6 +38,7 @@ class OdinDepthAdapter(Node):
         self.declare_parameter("grid_width", 12)
         self.declare_parameter("rotation_deg", 90)
         self.declare_parameter("memory_frames", 8)
+        self.declare_parameter("memory_stride", 3)
         self.declare_parameter("max_depth", 6.0)
         self.declare_parameter("min_depth", 0.2)
         self.input_topic = str(self.get_parameter("input_topic").value)
@@ -46,13 +47,15 @@ class OdinDepthAdapter(Node):
         self.grid_width = int(self.get_parameter("grid_width").value)
         self.rotation_deg = int(self.get_parameter("rotation_deg").value)
         self.memory_frames = int(self.get_parameter("memory_frames").value)
+        self.memory_stride = int(self.get_parameter("memory_stride").value)
         self.max_depth = float(self.get_parameter("max_depth").value)
         self.min_depth = float(self.get_parameter("min_depth").value)
         if self.rotation_deg not in (0, 90, 180, 270):
             raise ValueError("rotation_deg must be one of 0, 90, 180, 270")
-        if self.memory_frames < 1:
-            raise ValueError("memory_frames must be positive")
-        self._depth_memory: deque[np.ndarray] = deque(maxlen=self.memory_frames)
+        if self.memory_frames < 1 or self.memory_stride < 1:
+            raise ValueError("memory_frames和memory_stride必须大于0")
+        self.history_frames = (self.memory_frames - 1) * self.memory_stride + 1
+        self._depth_memory: deque[np.ndarray] = deque(maxlen=self.history_frames)
         self.bridge = CvBridge()
         self.publisher = self.create_publisher(Float32MultiArray, self.output_topic, 1)
         self.subscription = self.create_subscription(
@@ -61,7 +64,8 @@ class OdinDepthAdapter(Node):
         self.get_logger().info(
             f"Depth {self.input_topic} -> {self.output_topic}, "
             f"rotation={self.rotation_deg}deg CCW, grid={self.grid_height}x{self.grid_width}, "
-            f"memory={self.memory_frames} frames, range={self.min_depth:.1f}-{self.max_depth:.1f}m"
+            f"memory={self.memory_frames}张/间隔{self.memory_stride}帧, "
+            f"range={self.min_depth:.1f}-{self.max_depth:.1f}m"
         )
 
     def depth_callback(self, msg: Image) -> None:
@@ -86,11 +90,12 @@ class OdinDepthAdapter(Node):
             grid = min_pool_depth(depth_m, self.grid_height, self.grid_width, self.max_depth)
             if not self._depth_memory:
                 # 与仿真回合首帧一致: 用当前深度帧复制填满历史窗口。
-                self._depth_memory.extend(grid.copy() for _ in range(self.memory_frames))
+                self._depth_memory.extend(grid.copy() for _ in range(self.history_frames))
             else:
                 self._depth_memory.append(grid.copy())
             out = Float32MultiArray()
-            out.data = np.stack(tuple(self._depth_memory), axis=0).astype(np.float32).reshape(-1).tolist()
+            frames = tuple(self._depth_memory)[::self.memory_stride]
+            out.data = np.stack(frames, axis=0).astype(np.float32).reshape(-1).tolist()
             self.publisher.publish(out)
         except Exception as exc:  # malformed frame: keep previous features until timeout
             self.get_logger().warning(f"Could not convert Odin1 depth frame: {exc}")

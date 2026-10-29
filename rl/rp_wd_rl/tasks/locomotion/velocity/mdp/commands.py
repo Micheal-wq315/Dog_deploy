@@ -57,6 +57,10 @@ class UniformPostureCommand(CommandTerm):
         ):
             r = torch.empty(n, device=self.device)
             self.posture_command[env_ids, col] = r.uniform_(*value_range)
+        if self.cfg.zero_on_course:
+            from .odin_course import odin_course_mask
+            ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+            self.posture_command[ids[odin_course_mask(self._env)[ids]]] = 0.0
 
     def _update_command(self):
         # 指令不随时间演化 (只有 resample 会改变它)
@@ -70,6 +74,7 @@ class UniformPostureCommandCfg(CommandTermCfg):
     class_type: type = UniformPostureCommand
 
     resampling_time_range: tuple[float, float] = (10.0, 10.0)
+    zero_on_course: bool = False
 
     @configclass
     class Ranges:

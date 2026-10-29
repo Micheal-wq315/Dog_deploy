@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+
 import torch
 
 from isaaclab.envs import ManagerBasedEnv
@@ -50,3 +51,11 @@ def randomize_sensor_bias(
 
     getattr(env, GYRO_BIAS_ATTR)[env_ids] = _uniform((num_reset, 3), gyro_bias_range)
     getattr(env, JOINT_OFFSET_ATTR)[env_ids] = _uniform((num_reset, num_joints), joint_pos_offset_range)
+
+def reset_odin_depth_memory(env, env_ids):
+    """每次复位都重新采样相机误差并复制首帧，避免跨回合泄漏历史。"""
+    for key in ("policy", "teacher"):
+        state = getattr(env, f"_rpwd_odin_memory_{key}", None)
+        if state is not None:
+            state["reset_step"][env_ids] = -1
+            state["frame"][env_ids] = -1

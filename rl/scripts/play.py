@@ -35,6 +35,7 @@ parser.add_argument("--real-time", action="store_true", default=False, help="按
 parser.add_argument("--max_steps", type=int, default=0, help="回放步数上限 (0 = 一直跑, 便于脚本自检).")
 parser.add_argument("--no-export", action="store_true", default=False, help="跳过 ONNX 导出.")
 parser.add_argument("--export_dir", type=str, default=None, help="导出目录 (默认 rl/exported).")
+parser.add_argument("--depth-memory-stride", type=int, default=None, help="v16为3，旧1740维模型回放用1。")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -74,6 +75,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     """回放 + 导出."""
     if args_cli.num_envs is not None:
         env_cfg.scene.num_envs = args_cli.num_envs
+    if args_cli.depth_memory_stride is not None:
+        if "OdinDepth" not in args_cli.task or args_cli.depth_memory_stride < 1:
+            raise ValueError("--depth-memory-stride仅用于深度任务且必须大于0。")
+        env_cfg.observations.depth_memory.depth_memory.params["memory_stride"] = args_cli.depth_memory_stride
     if args_cli.seed is not None:
         agent_cfg.seed = args_cli.seed
     if args_cli.experiment_name is not None:
@@ -108,7 +113,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    runner.load(resume_path)
+    from policy_checkpoint import load_inference_checkpoint
+    load_inference_checkpoint(runner, resume_path)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     # ---- 导出 ONNX (部署端用) ----

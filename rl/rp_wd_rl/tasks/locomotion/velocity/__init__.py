@@ -4,6 +4,19 @@ import gymnasium as gym
 
 from . import agents
 
+for _stage, _env_class, _runner_class in (
+    ("Teacher", "RPWDOdinDepthEnvCfg_TEACHER", "RPWDOdinTeacherRunnerCfg"),
+    ("Student", "RPWDOdinDepthEnvCfg_STUDENT", "RPWDOdinStudentRunnerCfg"),
+):
+    gym.register(
+        id=f"Isaac-Velocity-Rough-RPWD-OdinDepth-{_stage}-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv", disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.rp_wd_odin_depth_env_cfg:{_env_class}",
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:{_runner_class}",
+        },
+    )
+
 ##
 # 注册环境
 ##

@@ -16,6 +16,7 @@ from isaaclab.sensors import TiledCamera
 
 from rp_wd_rl.assets.rp_wd_contract import (
     ODIN_DEPTH_MEMORY_FRAMES,
+    ODIN_DEPTH_MEMORY_STRIDE,
     ODIN_DEPTH_ROTATION_K,
 )
 
@@ -47,6 +48,7 @@ def odin_depth_grid(
     random_crop: bool = True,
     augmentation_warmup_steps: int = 12_000,
     augmentation_ramp_steps: int = 48_000,
+    crop_transform: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Odin1 风格深度观测: 随机裁切、深度噪声/缺测，再做最近障碍保留型池化.
 
@@ -88,6 +90,11 @@ def odin_depth_grid(
         theta[:, 1, 1] = crop_h
         theta[:, 0, 2] = shift_x
         theta[:, 1, 2] = shift_y
+        if crop_transform is not None:
+            # 每回合固定几何偏差，避免逐帧随机缩放破坏障碍的时间连续性。
+            identity = torch.zeros_like(theta)
+            identity[:, 0, 0] = identity[:, 1, 1] = 1.0
+            theta = identity + (crop_transform - identity) * aug_progress
         grid = F.affine_grid(theta, (count, 1, *depth.shape[-2:]), align_corners=False)
         depth = F.grid_sample(
             depth.unsqueeze(1), grid, mode="bilinear", padding_mode="border", align_corners=False
@@ -124,15 +131,63 @@ def odin_depth_memory(
     augmentation_ramp_steps: int = 48_000,
     memory_frames: int = ODIN_DEPTH_MEMORY_FRAMES,
     rotation_k: int = ODIN_DEPTH_ROTATION_K,
+    memory_key: str = "policy",
+    episode_bias_m: float = 0.0,
+    scale_error: float = 0.0,
+    occlusion_prob: float = 0.0,
+    packet_loss_prob: float = 0.0,
+    max_latency_frames: int = 0,
+    memory_stride: int = ODIN_DEPTH_MEMORY_STRIDE,
 ) -> torch.Tensor:
     """输出按相机新帧更新的时间记忆，形状为 [N, frames, H, W].
 
-    深度相机约15Hz而策略为50Hz；以 camera.frame 检测新图，只在新图到达时推进
+    默认保留22帧并间隔3帧抽8张，约覆盖1.4秒；以camera.frame检测新图，只在新图到达时推进
     历史窗口。每回合首帧用当前图复制填满，和部署端适配器初始化规则一致。
     """
-    if memory_frames < 1:
-        raise ValueError("memory_frames 必须大于0")
+    if memory_frames < 1 or memory_stride < 1:
+        raise ValueError("memory_frames和memory_stride必须大于0")
     sensor: TiledCamera = env.scene.sensors[sensor_cfg.name]
+    # SensorBase按需更新；先取data触发到期渲染，再检查frame，避免缓存阻止新帧生成。
+    _ = sensor.data
+    frame_id = sensor.frame.to(device=env.device, dtype=torch.long)
+    attr = f"_rpwd_odin_memory_{memory_key}"
+    state = getattr(env, attr, None)
+    history_frames = (memory_frames - 1) * memory_stride + 1
+    shape = (env.num_envs, history_frames, *grid_size)
+    initialized = state is None or state["memory"].shape != shape
+    if initialized:
+        state = {
+            "memory": torch.ones(shape, device=env.device),
+            "queue": torch.ones(env.num_envs, max_latency_frames + 1, *grid_size, device=env.device),
+            "frame": torch.full_like(frame_id, -1),
+            "reset_step": torch.full_like(frame_id, -1),
+            "profile": torch.zeros(env.num_envs, device=env.device),
+            "bias": torch.zeros(env.num_envs, device=env.device),
+            "scale": torch.ones(env.num_envs, device=env.device),
+            "latency": torch.zeros(env.num_envs, dtype=torch.long, device=env.device),
+            "crop": torch.zeros(env.num_envs, 2, 3, device=env.device),
+        }
+        state["crop"][:, 0, 0] = state["crop"][:, 1, 1] = 1.0
+        setattr(env, attr, state)
+    step = int(env.common_step_counter)
+    reset_mask = ((env.episode_length_buf == 0) & (state["reset_step"] != step)) | initialized
+    new_frame = frame_id != state["frame"]
+    if not bool((new_frame | reset_mask).any()):
+        return state["memory"][:, ::memory_stride]
+    ids = reset_mask.nonzero(as_tuple=False).flatten()
+    if len(ids):
+        r = torch.rand(len(ids), device=env.device)
+        # 60%正常、30%偏差、10%严重退化；这是待用真实 Odin 数据校准的初始配比。
+        state["profile"][ids] = torch.where(r < 0.6, 0.0, torch.where(r < 0.9, 1.0, 2.0))
+        state["bias"][ids] = torch.empty(len(ids), device=env.device).uniform_(-episode_bias_m, episode_bias_m)
+        state["scale"][ids] = 1.0 + torch.empty(len(ids), device=env.device).uniform_(-scale_error, scale_error)
+        state["latency"][ids] = torch.randint(max_latency_frames + 1, (len(ids),), device=env.device)
+        crop = torch.empty(len(ids), 2, device=env.device).uniform_(*crop_fraction_range)
+        state["crop"][ids, 0, 0] = crop[:, 1]
+        state["crop"][ids, 1, 1] = crop[:, 0]
+        shift = (torch.rand(len(ids), 2, device=env.device) * 2 - 1) * (1 - crop.flip(1))
+        state["crop"][ids, :, 2] = shift
+        state["reset_step"][ids] = step
     current = odin_depth_grid(
         env,
         sensor_cfg=sensor_cfg,
@@ -146,27 +201,35 @@ def odin_depth_memory(
         random_crop=random_crop,
         augmentation_warmup_steps=augmentation_warmup_steps,
         augmentation_ramp_steps=augmentation_ramp_steps,
+        crop_transform=state["crop"],
     )
-    frame_id = sensor.frame.to(device=current.device, dtype=torch.long)
-    memory_attr = "_rpwd_odin_depth_memory"
-    frame_attr = "_rpwd_odin_depth_frame_id"
-    reset_mask = env.episode_length_buf == 0
-
-    memory = getattr(env, memory_attr, None)
-    previous_frame_id = getattr(env, frame_attr, None)
-    if memory is None or memory.shape != (env.num_envs, memory_frames, *grid_size):
-        memory = current.unsqueeze(1).expand(-1, memory_frames, -1, -1).clone()
-    else:
-        new_frame = frame_id != previous_frame_id
-        advance = new_frame & ~reset_mask
-        shifted = torch.cat((memory[:, 1:], current.unsqueeze(1)), dim=1)
-        memory = torch.where(advance[:, None, None, None], shifted, memory)
-        reset_history = current.unsqueeze(1).expand(-1, memory_frames, -1, -1)
-        memory = torch.where(reset_mask[:, None, None, None], reset_history, memory)
-
-    setattr(env, memory_attr, memory)
-    setattr(env, frame_attr, frame_id.clone())
-    return memory
+    progress = min(1.0, max(0.0, (step - augmentation_warmup_steps) / max(augmentation_ramp_steps, 1)))
+    biased = (state["profile"] > 0).float() * progress
+    current = current * (1.0 + (state["scale"] - 1.0)[:, None, None] * biased[:, None, None])
+    current += (state["bias"] / max_depth * biased)[:, None, None]
+    current.clamp_(0.0, 1.0)
+    severe = state["profile"] == 2
+    blocked = (torch.rand(env.num_envs, device=env.device) < occlusion_prob * progress) & severe
+    # 连片遮挡比独立噪点更接近镜头污渍、部分遮挡；沿用部署端无回波=最远距离的语义。
+    yy = torch.arange(grid_size[0], device=env.device)[None, :, None]
+    xx = torch.arange(grid_size[1], device=env.device)[None, None, :]
+    cy = torch.randint(grid_size[0], (env.num_envs, 1, 1), device=env.device)
+    cx = torch.randint(grid_size[1], (env.num_envs, 1, 1), device=env.device)
+    patch = ((yy - cy).abs() <= 2) & ((xx - cx).abs() <= 2) & blocked[:, None, None]
+    current = current.masked_fill(patch, 1.0)
+    queue = torch.cat((state["queue"][:, 1:], current[:, None]), dim=1)
+    queue = torch.where(new_frame[:, None, None, None], queue, state["queue"])
+    queue = torch.where(reset_mask[:, None, None, None], current[:, None].expand_as(queue), queue)
+    latency = (state["latency"].float() * progress).long()
+    delivered = queue[torch.arange(env.num_envs, device=env.device), max_latency_frames - latency]
+    dropped = torch.rand(env.num_envs, device=env.device) < packet_loss_prob * progress
+    advance = new_frame & ~reset_mask & ~dropped
+    shifted = torch.cat((state["memory"][:, 1:], delivered[:, None]), dim=1)
+    memory = torch.where(advance[:, None, None, None], shifted, state["memory"])
+    state["memory"] = torch.where(reset_mask[:, None, None, None], delivered[:, None].expand_as(memory), memory)
+    state["queue"] = queue
+    state["frame"] = frame_id.clone()
+    return state["memory"][:, ::memory_stride]
 
 
 def base_ang_vel_biased(

@@ -6,6 +6,8 @@ from isaaclab_rl.rsl_rl import (
     RslRlOnPolicyRunnerCfg,
     RslRlPpoActorCriticCfg,
     RslRlPpoAlgorithmCfg,
+    RslRlDistillationRunnerCfg,
+    RslRlDistillationAlgorithmCfg,
 )
 
 
@@ -67,7 +69,7 @@ class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
 
     max_iterations = 8000
     # 另开日志空间，避免误从旧780维 MLP checkpoint 续训。
-    experiment_name = "rp_wd_odin_depth_memory"
+    experiment_name = "rp_wd_odin_course"
 
     # policy 仍是 56维基础观测 + 12维力矩观测，每项按部署契约堆叠3帧。
     # CNN 对独立深度组 [B,8,16,12] 编码，空间维先保留到第二层再池化。
@@ -123,4 +125,30 @@ class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
         share_cnn_encoders=False,
+    )
+    # 绕行需要先侧向让路再向前，延长价值折扣时域以传播延迟收益。
+    algorithm.gamma = 0.995
+
+
+@configclass
+class RPWDOdinTeacherRunnerCfg(RPWDOdinDepthPPORunnerCfg):
+    max_iterations = 6000
+    experiment_name = "rp_wd_odin_teacher"
+
+
+@configclass
+class RPWDOdinStudentRunnerCfg(RslRlDistillationRunnerCfg):
+    """学生轨迹上的在线动作模仿；从教师权重初始化，降低冷启动摔倒。"""
+
+    num_steps_per_env = 24
+    max_iterations = 2000
+    save_interval = 50
+    experiment_name = "rp_wd_odin_student"
+    clip_actions = 10.0
+    student = RPWDOdinDepthPPORunnerCfg().actor
+    teacher = RPWDOdinDepthPPORunnerCfg().actor
+    obs_groups = {"student": ["policy", "depth_memory"], "teacher": ["policy", "depth_teacher"]}
+    algorithm = RslRlDistillationAlgorithmCfg(
+        num_learning_epochs=3, gradient_length=24, learning_rate=3e-4,
+        max_grad_norm=1.0, loss_type="huber",
     )
