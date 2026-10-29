@@ -274,7 +274,7 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
 
 @configclass
 class RPWDOdinDepthEnvCfg_TEACHER(RPWDOdinDepthEnvCfg):
-    """6000轮清晰深度 PPO 教师，先学运动和赛道通过。"""
+    """8000轮清晰深度 PPO 教师，先学运动和赛道通过。"""
 
     def __post_init__(self):
         super().__post_init__()

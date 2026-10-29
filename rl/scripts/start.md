@@ -27,13 +27,13 @@
 ./rl/scripts/train.sh --resume                           # 从最新 checkpoint 续训
 ./rl/scripts/train.sh --resume --load_run 2026-10-11_11-35-05_rolling_v4 --checkpoint model_1500.pt
 
-# Odin1 v16：6000轮清晰深度教师 → 三种子验收 → 2000轮含噪学生（共8000，headless）
+# Odin1 v17：8000轮清晰深度教师 → 三种子验收 → 2000轮含噪学生（共10000，headless）
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
 # 分阶段续训学生，到学生阶段总目标2000轮
 ./rl/scripts/train_odin_depth.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Student-v0 \
   --resume --load_run <学生run名> --max_iterations 2000
-# 直接PPO对照（8000轮，含深度增强）
-./rl/scripts/train_odin_depth.sh --run_name odin_course_direct_v16
+# 直接PPO对照（10000轮，含深度增强）
+./rl/scripts/train_odin_depth.sh --run_name odin_course_direct_v17
 ```
 
 - 日志：`rl/logs/train_*.log`（训练 stdout）＋ `rl/logs/rsl_rl/<实验名>/<时间戳>_<run_name>/`（TensorBoard + checkpoint）

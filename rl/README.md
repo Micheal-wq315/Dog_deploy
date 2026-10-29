@@ -53,7 +53,7 @@ export ISAACLAB_PATH=/media/rmer/data/IsaacLab
 ./rl/scripts/train.sh
 ./rl/scripts/train.sh --num_envs 4096 --max_iterations 5000 --run_name dr_v1
 
-# Odin1 深度避障策略 (独立 profile; headless 相机渲染; 默认 256 env / 8000 iter)
+# Odin1 深度避障策略 (独立 profile; headless 相机渲染; 默认256环境 / 8000教师+2000学生，共10000轮)
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
 
 # 2) 回放 (需要图形界面) + 导出 ONNX
@@ -128,7 +128,7 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 做仿真回放并导出专属 ONNX。策略使用独立 CNN 编码8帧深度记忆；
 导出时会把本体观测和深度历史展平成部署端单输入 ONNX。
 
-推荐6000轮教师PPO＋2000轮学生在线蒸馏；教师、学生独立日志，test/play都能读取。完整的8000轮课程、目标奖励、接触约束和续训规则见 [CURRICULUM.md](CURRICULUM.md)。
+推荐8000轮教师PPO＋2000轮学生在线蒸馏；教师、学生独立日志，test/play都能读取。完整的10000轮课程、目标奖励、接触约束和续训规则见 [CURRICULUM.md](CURRICULUM.md)。
 
 **最容易写错的两点**（都已在校验脚本里逐项检查）：
 
