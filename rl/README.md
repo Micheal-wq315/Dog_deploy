@@ -53,7 +53,7 @@ export ISAACLAB_PATH=/media/rmer/data/IsaacLab
 ./rl/scripts/train.sh
 ./rl/scripts/train.sh --num_envs 4096 --max_iterations 5000 --run_name dr_v1
 
-# Odin1 深度避障策略 (独立 profile; headless 相机渲染; 默认256环境 / 8000教师+2000学生，共10000轮)
+# Odin1 深度避障策略 (独立 profile; headless 相机渲染; 默认256环境 / 18000教师+2000学生，共20000轮)
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
 
 # 2) 回放 (需要图形界面) + 导出 ONNX
@@ -118,19 +118,19 @@ cp rl/exported/policy_flat.onnx src/inference/robots/wheel_quad/models/policy_fl
 | 深度增强 | 学生渐入3cm噪声、1%缺测、回合固定95–100%裁切、偏差/尺度、连片遮挡、8%丢帧、0–2帧延迟；仅新图更新历史 |
 | 深度语义 | 仿真使用 `distance_to_image_plane`（光轴Z深度），与ROS深度图的米制/毫米制值对齐；驱动语义仍需实测确认 |
 | 仿真相机 | 前向 160×120、约 120°×90°、0.2–6 m；安装位姿是待实测标定的初始估值 |
-| 障碍课程 | 实体上下4级台阶、矮障碍、45cm绕行墙、起伏/坡道＋平地自由控制；安全到点升级，物理随机化沿用rough |
+| 障碍课程 | 1–8cm实体上下台阶、低障碍、起伏/坡道＋平地自由控制，四分之一专项环境长期复习低难度；安全到点升级，物理随机化沿用rough |
 | 力矩处理 | 无电机力矩惩罚；12维腿部力矩只作为策略观测 |
 | 任务 ID | `Isaac-Velocity-Rough-RPWD-OdinDepth-v0` / `...-OdinDepth-Play-v0` |
 | ROS2 部署 | Odin1 官方深度图 → `odin_depth_adapter.launch.py` → `/odin1/depth_features` → `policy:=odin_depth` |
 
-v18修复跨回合终点/碰撞状态重置，新增无效位置目标约束（非力矩惩罚），地形从单级小台阶起步；1000/3000轮加入阶段验收，达标才继续。设计与失败证据见`CURRICULUM.md`。
+v19基础地形长期训练：18000教师＋2000学生，平地/上下阶占75%，单级高度1–8cm，固定四分之一专项环境长期复习0–2级。2000/6000轮验平地、12000轮验上下阶、18000轮三种子基础验收后才进入学生；保持v18复位修复、无效位置目标约束与无力矩惩罚。设计与失败证据见`CURRICULUM.md`。
 
 一键 headless 训练：`./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42`。
 用 `./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 --checkpoint <path>`
 做仿真回放并导出专属 ONNX。策略使用独立 CNN 编码8帧深度记忆；
 导出时会把本体观测和深度历史展平成部署端单输入 ONNX。
 
-推荐8000轮教师PPO＋2000轮学生在线蒸馏；教师、学生独立日志，test/play都能读取。完整的10000轮课程、目标奖励、接触约束和续训规则见 [CURRICULUM.md](CURRICULUM.md)。
+推荐18000轮基础地形教师PPO＋2000轮学生在线蒸馏；教师、学生独立日志，test/play都能读取。完整的20000轮课程、目标奖励、接触约束和续训规则见 [CURRICULUM.md](CURRICULUM.md)。
 
 **最容易写错的两点**（都已在校验脚本里逐项检查）：
 

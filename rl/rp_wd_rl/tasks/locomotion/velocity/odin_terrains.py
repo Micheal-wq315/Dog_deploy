@@ -94,3 +94,19 @@ ODIN_COURSE_TERRAINS_CFG = TerrainGeneratorCfg(
         "slope": OdinCourseTerrainCfg(proportion=1.0, course_kind="slope"),
     },
 )
+
+
+# 基础通过能力专项：不混入需要规划的绕墙任务，75%为平地和上下阶。
+ODIN_BASIC_TERRAINS_CFG = TerrainGeneratorCfg(
+    size=(6.0, 6.0), num_rows=12, num_cols=16,
+    border_width=10.0, border_height=1.0, curriculum=True,
+    difficulty_range=(0.0, 1.0), use_cache=False,
+    sub_terrains={
+        "flat_control": OdinCourseTerrainCfg(proportion=4.0, course_kind="manual"),
+        "stairs_up": OdinCourseTerrainCfg(proportion=4.0, course_kind="stairs_up", step_height_range=(0.01, 0.08)),
+        "stairs_down": OdinCourseTerrainCfg(proportion=4.0, course_kind="stairs_down", step_height_range=(0.01, 0.08)),
+        "low_obstacles": OdinCourseTerrainCfg(proportion=1.0, course_kind="low_obstacles", step_height_range=(0.01, 0.08)),
+        "rough": OdinCourseTerrainCfg(proportion=2.0, course_kind="rough", step_height_range=(0.005, 0.05)),
+        "slope": OdinCourseTerrainCfg(proportion=1.0, course_kind="slope"),
+    },
+)

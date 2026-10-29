@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 顺序执行8000轮清晰深度教师、2000轮含噪学生；任一阶段失败立即停止。
+# 顺序执行18000轮基础地形教师、2000轮含噪学生；任一阶段失败立即停止。
 set -euo pipefail
 if [[ "${RPWD_ODIN_PIPELINE_INHIBITED:-0}" != 1 ]] && command -v systemd-inhibit >/dev/null 2>&1; then
     exec systemd-inhibit --what=idle:sleep:handle-lid-switch --why="Odin教师、验收与学生完整训练流程" \
@@ -11,15 +11,15 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 for arg in "$@"; do
     case "${arg}" in
         --resume|--load_run*|--checkpoint*|--teacher_checkpoint*|--task*|--max_iterations*|--experiment_name*|--run_name*)
-            echo "完整流程固定8000+2000轮（合计10000）；分阶段启动/续训请使用train_odin_depth.sh，见rl/CURRICULUM.md。" >&2
+            echo "完整流程固定18000+2000轮（合计20000）；分阶段启动/续训请使用train_odin_depth.sh，见rl/CURRICULUM.md。" >&2
             exit 1 ;;
     esac
 done
-RUN_LABEL="odin_v18_$(date +%Y%m%d_%H%M%S)"
+RUN_LABEL="odin_basic_v19_$(date +%Y%m%d_%H%M%S)"
 
-# 前1000轮先验平地；3000轮再验6cm上下阶。未达标就停，避免盲跑满8000轮。
+# 2000/6000轮验平地并记录台阶诊断；12000轮加入上下阶硬验收。
 TEACHER_RESUME=()
-for TARGET in 1000 3000 8000; do
+for TARGET in 2000 6000 12000 18000; do
     STAGE_LABEL="${RUN_LABEL}_teacher${TARGET}"
     "${SCRIPT_DIR}/train_odin_depth.sh" "$@" \
         --task Isaac-Velocity-Rough-RPWD-OdinDepth-Teacher-v0 \
@@ -40,12 +40,12 @@ print(result["checkpoint"])
 PY
 )"
 TEACHER_RUN_DIR="$(dirname "${TEACHER_CHECKPOINT}")"
-if [[ "${TARGET}" != 8000 ]]; then
+if [[ "${TARGET}" != 18000 ]]; then
     STAGE_EVAL="${TEACHER_RUN_DIR}/stage_gate_seed42"
     "${SCRIPT_DIR}/gui_test.sh" --obstacle-benchmark --headless \
         --checkpoint "${TEACHER_CHECKPOINT}" --seed 42 --num_envs 12 --save-dir "${STAGE_EVAL}"
     SCENARIOS=(flat_reference)
-    [[ "${TARGET}" == 3000 ]] && SCENARIOS+=(step_up_06cm step_down_08cm)
+    [[ "${TARGET}" == 12000 ]] && SCENARIOS+=(step_up_06cm step_down_08cm)
     python "${SCRIPT_DIR}/qualify_odin_teacher.py" "${STAGE_EVAL}" \
         --scenarios "${SCENARIOS[@]}" --output "${TEACHER_RUN_DIR}/stage_gate.json"
 fi
@@ -58,9 +58,9 @@ for EVAL_SEED in 42 43 44; do
         --checkpoint "${TEACHER_CHECKPOINT}" --seed "${EVAL_SEED}" --num_envs 12 --save-dir "${EVAL_DIR}"
     EVAL_DIRS+=("${EVAL_DIR}")
 done
-# 平地/上阶/下阶/矮障碍首次尝试完成率>=80%、低接触完成率>=60%才进入蒸馏。
-# 墙和交错绕行先保留诊断结果，不把局部速度策略宣称为完整导航系统。
-python "${SCRIPT_DIR}/qualify_odin_teacher.py" "${EVAL_DIRS[@]}" --output "${TEACHER_RUN_DIR}/qualification.json"
+# 基础专项：平地、6cm上阶、8cm下阶；12cm箱与绕行保留诊断，不作基础达标声明。
+python "${SCRIPT_DIR}/qualify_odin_teacher.py" "${EVAL_DIRS[@]}" \
+    --scenarios flat_reference step_up_06cm step_down_08cm --output "${TEACHER_RUN_DIR}/qualification.json"
 "${SCRIPT_DIR}/train_odin_depth.sh" "$@" \
     --task Isaac-Velocity-Rough-RPWD-OdinDepth-Student-v0 \
     --max_iterations 2000 --run_name "${RUN_LABEL}" --teacher_checkpoint "${TEACHER_CHECKPOINT}"

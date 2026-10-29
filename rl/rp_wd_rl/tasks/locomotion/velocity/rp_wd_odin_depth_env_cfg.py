@@ -26,7 +26,7 @@ from rp_wd_rl.assets.rp_wd_contract import (
 )
 
 from . import mdp
-from .odin_terrains import ODIN_COURSE_TERRAINS_CFG
+from .odin_terrains import ODIN_BASIC_TERRAINS_CFG
 from .rp_wd_env_cfg import ObservationsCfg
 from .rp_wd_rough_env_cfg import RPWDRoughEnvCfg, RPWDRoughSceneCfg
 
@@ -87,7 +87,7 @@ class OdinBenchmarkTerrainCfg(SubTerrainBaseCfg):
     scenario: str = "flat_reference"
 
 
-RPWD_ODIN_DEPTH_TERRAINS_CFG = ODIN_COURSE_TERRAINS_CFG
+RPWD_ODIN_DEPTH_TERRAINS_CFG = ODIN_BASIC_TERRAINS_CFG
 
 
 @configclass
@@ -219,23 +219,24 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
         self.events.depth_memory_reset = EventTerm(func=mdp.reset_odin_depth_memory, mode="reset")
         self.curriculum.terrain_levels = CurrTerm(
             func=mdp.odin_safe_terrain_levels,
-            params={"max_level_schedule": ((0, 0), (24_000, 2), (72_000, 5), (120_000, 8), (144_000, 11))},
+            params={"max_level_schedule": ((0, 0), (48_000, 2), (120_000, 5), (216_000, 8), (312_000, 11)),
+                    "rehearsal_stride": 4, "rehearsal_max_level": 2},
         )
         self.curriculum.command_lin_vel.params.update(
-            start_scale=0.6, end_scale=1.0, warmup_steps=24_000,
-            ramp_steps=72_000, ramp_angular=True,
+            start_scale=0.6, end_scale=1.0, warmup_steps=48_000,
+            ramp_steps=192_000, ramp_angular=True,
         )
         self.curriculum.posture_command.params.update(
             start_scale=0.0, end_scale=1.0,
-            warmup_steps=108_000, ramp_steps=48_000,
+            warmup_steps=336_000, ramp_steps=72_000,
         )
         self.events.push_robot.params["velocity_range"] = {
             "x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)
         }
         self.curriculum.push_curriculum = CurrTerm(
             func=mdp.push_velocity_curriculum,
-            params={"start_step": 132_000, "ramp_steps": 36_000,
-                    "max_push_x": 0.25, "max_push_y": 0.20, "max_push_z": 0.0},
+            params={"start_step": 360_000, "ramp_steps": 72_000,
+                    "max_push_x": 0.15, "max_push_y": 0.10, "max_push_z": 0.0},
         )
         self.rewards.track_lin_vel_xy_exp.func = mdp.odin_course_tracking
         self.rewards.track_lin_vel_xy_exp.weight = 3.0
@@ -285,7 +286,7 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
 
 @configclass
 class RPWDOdinDepthEnvCfg_TEACHER(RPWDOdinDepthEnvCfg):
-    """8000轮清晰深度 PPO 教师，先学运动和赛道通过。"""
+    """18000轮基础地形 PPO 教师，长期巩固运动和上下台阶。"""
 
     def __post_init__(self):
         super().__post_init__()
@@ -293,9 +294,6 @@ class RPWDOdinDepthEnvCfg_TEACHER(RPWDOdinDepthEnvCfg):
             noise_std=0.0, dropout_prob=0.0, random_crop=False,
             episode_bias_m=0.0, scale_error=0.0, occlusion_prob=0.0,
             packet_loss_prob=0.0, max_latency_frames=0,
-        )
-        self.curriculum.terrain_levels.params["max_level_schedule"] = (
-            (0, 0), (24_000, 2), (60_000, 5), (96_000, 8), (108_000, 11)
         )
 
 

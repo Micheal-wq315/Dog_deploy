@@ -27,22 +27,23 @@
 ./rl/scripts/train.sh --resume                           # 从最新 checkpoint 续训
 ./rl/scripts/train.sh --resume --load_run 2026-10-11_11-35-05_rolling_v4 --checkpoint model_1500.pt
 
-# Odin1 v18：8000轮清晰深度教师 → 三种子验收 → 2000轮含噪学生（共10000，headless）
+# Odin1 v19：18000轮基础地形教师 → 三种子验收 → 2000轮含噪学生（共20000，headless）
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
 # 分阶段续训学生，到学生阶段总目标2000轮
 ./rl/scripts/train_odin_depth.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Student-v0 \
   --resume --load_run <学生run名> --max_iterations 2000
-# 直接PPO对照（10000轮，含深度增强）
-./rl/scripts/train_odin_depth.sh --run_name odin_course_direct_v18
+# 直接PPO对照（20000轮，含深度增强）
+./rl/scripts/train_odin_depth.sh --run_name odin_basic_direct_v19
 ```
 
 - 日志：`rl/logs/train_*.log`（训练 stdout）＋ `rl/logs/rsl_rl/<实验名>/<时间戳>_<run_name>/`（TensorBoard + checkpoint）
 - 训练期间**自动阻止系统休眠**（`systemd-inhibit`），夜间不会被冻死
 - 关键指标在 TensorBoard 里看 `Episode_Reward/*`（跟踪 vs 惩罚的配比）和 `Episode_Termination/*`
 - 深度相机使用离屏渲染；训练仍无 GUI，但比普通任务更占渲染资源
-- 教师：1000–4000轮扩展速度，4500–6500轮加入平地姿态/高度，5500–7000轮渐入小幅水平推扰；学生前1000轮渐入深度退化
-- 一键流程在1000轮先验平地，3000轮再验6cm上阶/8cm下阶，通过才续训；最终8000轮进行三种子验收。平地0.35m/s指令下实测vx需≥0.25m/s，未通过自动停止
-- 教师地形上限按0/1000/2500/4000/4500轮解锁0/2/5/8/11；到达终点且无严重非足端撞击才升级。完整设计见 [CURRICULUM.md](../CURRICULUM.md)
+- 教师：2000–10000轮扩展速度，14000–17000轮加入平地姿态/高度，15000–18000轮渐入小幅水平推扰；学生前1000轮渐入深度退化
+- 一键流程在2000/6000轮验平地并记录台阶诊断，12000轮验6cm上阶/8cm下阶，通过才续训；最终18000轮进行三种子基础验收。平地0.35m/s指令下实测vx需≥0.25m/s，未通过自动停止
+- 教师地形上限按0/2000/5000/9000/13000轮解锁0/2/5/8/11，最高单级8cm；四分之一专项环境长期复习0–2级；到达终点且无严重非足端撞击才升级。完整设计见 [CURRICULUM.md](../CURRICULUM.md)
+- 本轮专注平地、1–8cm上下阶/低障碍、起伏与缓坡，不混入绕墙训练；固定测试中的12cm箱与绕障只作诊断
 - 已移除所有电机力矩惩罚；12维腿部力矩观测仍保留
 - OdinDepth 当前输入契约为1740→16（68×3本体/力矩 + 8×16×12深度记忆）；旧780维 checkpoint 不兼容，需新模型
 - 深度原图默认逆时针旋转90°，adapter由22帧历史间隔3帧抽8张（约1.4秒）；旧1740维模型回放用`--depth-memory-stride 1`、ROS用`memory_stride:=1`。实物方向相反时启动adapter时设 `rotation_deg:=270`

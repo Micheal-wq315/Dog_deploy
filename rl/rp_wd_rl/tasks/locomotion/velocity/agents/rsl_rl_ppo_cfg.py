@@ -67,7 +67,7 @@ class RPWDRoughPPORunnerCfg(RPWDFlatPPORunnerCfg):
 class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
     """Odin1 深度避障 PPO: CNN 编码8帧深度记忆，MLP融合本体观测."""
 
-    max_iterations = 10000
+    max_iterations = 20000
     # 另开日志空间，避免误从旧780维 MLP checkpoint 续训。
     experiment_name = "rp_wd_odin_course"
 
@@ -132,7 +132,7 @@ class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
 
 @configclass
 class RPWDOdinTeacherRunnerCfg(RPWDOdinDepthPPORunnerCfg):
-    max_iterations = 8000
+    max_iterations = 18000
     experiment_name = "rp_wd_odin_teacher"
 
 

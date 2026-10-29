@@ -218,7 +218,8 @@ def contact_load_excess(env, sensor_cfg: SceneEntityCfg, threshold: float = 180.
     return ((force - threshold) / scale).clamp(0.0, 1.0)
 
 
-def odin_safe_terrain_levels(env, env_ids, max_level_schedule, max_nonfoot_force: float = 120.0):
+def odin_safe_terrain_levels(env, env_ids, max_level_schedule, max_nonfoot_force: float = 120.0,
+                             rehearsal_stride: int = 0, rehearsal_max_level: int = 2):
     """到达终点且未发生严重非足端撞击才升级；失败降级，平地始终为0级。"""
     term = env.command_manager.get_term("base_velocity")
     term.refresh_progress()
@@ -229,12 +230,16 @@ def odin_safe_terrain_levels(env, env_ids, max_level_schedule, max_nonfoot_force
         if env.common_step_counter >= step:
             cap = level
     cap = min(cap, terrain.terrain_origins.shape[0] - 1)
+    caps = torch.full_like(ids, cap)
+    if rehearsal_stride > 0:
+        # 固定一部分环境长期复习低难度，仍需安全成功才升级，不随机跳级。
+        caps = torch.where(ids.remainder(rehearsal_stride) == 0, min(cap, rehearsal_max_level), caps)
     success = odin_goal_success(env)[ids]
     safe = term.max_nonfoot_force[ids] < max_nonfoot_force
-    up = success & safe & term.course_mask[ids] & (terrain.terrain_levels[ids] < cap)
+    up = success & safe & term.course_mask[ids] & (terrain.terrain_levels[ids] < caps)
     down = ~success & term.course_mask[ids] & (env.episode_length_buf[ids] > 0)
     terrain.update_env_origins(ids, up, down)
-    levels = terrain.terrain_levels[ids].clamp(max=cap)
+    levels = torch.minimum(terrain.terrain_levels[ids], caps)
     terrain.terrain_levels[ids] = torch.where(term.course_mask[ids], levels, 0)
     terrain.env_origins[ids] = terrain.terrain_origins[terrain.terrain_levels[ids], terrain.terrain_types[ids]]
     return terrain.terrain_levels.float().mean()

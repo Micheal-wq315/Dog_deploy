@@ -12,7 +12,9 @@ def verify_odin_design(check):
     )
     from isaaclab.envs.mdp.commands import UniformVelocityCommand
     from unittest.mock import patch
-    from rp_wd_rl.tasks.locomotion.velocity.odin_terrains import OdinCourseTerrainCfg, odin_course_terrain
+    from rp_wd_rl.tasks.locomotion.velocity.odin_terrains import (
+        OdinCourseTerrainCfg, odin_course_terrain, ODIN_BASIC_TERRAINS_CFG,
+    )
     from benchmark_metrics import benchmark_attempt_metrics
     from rp_wd_rl.tasks.locomotion.velocity.mdp.rewards import _course_scale
     scaling_env = SimpleNamespace(command_manager=SimpleNamespace(
@@ -100,6 +102,10 @@ def verify_odin_design(check):
         easy, easy_origin = odin_course_terrain(0.0, cfg)
         check(f"{kind}简单端仅一级1cm", abs(max(mesh.vertices[:, 2].max() for mesh in easy) - .01) < 1e-6
               and abs(easy_origin[2] - (.01 if kind == "stairs_down" else 0.0)) < 1e-6)
+        basic = ODIN_BASIC_TERRAINS_CFG.sub_terrains[kind]
+        basic.size = (6., 6.)
+        meshes, origin = odin_course_terrain(1.0, basic)
+        check(f"{kind}基础专项上限为4级×8cm", abs(max(mesh.vertices[:, 2].max() for mesh in meshes) - .32) < 1e-6)
 
     levels = torch.tensor([0, 0, 1, 1])
     terrain = SimpleNamespace(terrain_levels=levels, terrain_types=torch.zeros(4, dtype=torch.long),
@@ -122,6 +128,11 @@ def verify_odin_design(check):
                            episode_length_buf=torch.full((4,), 100))
     odin_safe_terrain_levels(fake, torch.arange(4), ((0, 0), (24, 2)))
     check("到点安全升级、摔倒/失败降级、撞击到点不升级", levels.tolist() == [1, 0, 0, 1], str(levels.tolist()))
+    levels[:] = 1
+    term.max_nonfoot_force[:] = 0
+    manager.get_term = lambda name: torch.zeros(4, dtype=torch.bool) if name == "fall" else torch.ones(4, dtype=torch.bool)
+    odin_safe_terrain_levels(fake, torch.arange(4), ((0, 2),), rehearsal_stride=2, rehearsal_max_level=0)
+    check("复习环境保持低难度，其他环境仍按安全成功升级", levels.tolist() == [0, 2, 0, 2], str(levels.tolist()))
 
     rows = []
     for episode, distance, terminated in ((0, 1.6, 0), (1, 3.4, 1), (2, 3.3, 0)):
