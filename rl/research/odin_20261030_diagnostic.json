@@ -1,0 +1,183 @@
+{
+  "purpose": "只读诊断与首帧排除反事实统计；不覆盖原始验收，不代表正式通过。",
+  "contact_threshold_n": 20,
+  "stages": {
+    "rl/logs/rsl_rl/rp_wd_odin_teacher/2026-10-30_11-36-48_odin_basic_v20_20261030_113636_teacher6000/stage_gate_seed42": {
+      "flat_reference": {
+        "original_first_completed": 2,
+        "original_first_low_contact": 0,
+        "first_attempts": 2,
+        "diagnostic_excluding_global_step0_first_low_contact": 2,
+        "events_ge20n": [
+          {
+            "env_id": 0.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 193.16082763671875
+          },
+          {
+            "env_id": 1.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 158.20303344726562
+          }
+        ],
+        "peak_after_step0_n": 0.0
+      },
+      "step_up_06cm": {
+        "original_first_completed": 0,
+        "original_first_low_contact": 0,
+        "first_attempts": 2,
+        "diagnostic_excluding_global_step0_first_low_contact": 0,
+        "events_ge20n": [
+          {
+            "env_id": 2.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 219.30174255371094
+          },
+          {
+            "env_id": 3.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 224.1761932373047
+          }
+        ],
+        "peak_after_step0_n": 0.0
+      },
+      "step_down_08cm": {
+        "original_first_completed": 2,
+        "original_first_low_contact": 0,
+        "first_attempts": 2,
+        "diagnostic_excluding_global_step0_first_low_contact": 2,
+        "events_ge20n": [
+          {
+            "env_id": 4.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 221.97630310058594
+          },
+          {
+            "env_id": 5.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 155.23968505859375
+          }
+        ],
+        "peak_after_step0_n": 0.0
+      }
+    },
+    "rl/logs/rsl_rl/rp_wd_odin_teacher/2026-10-30_13-50-51_odin_basic_v20_20261030_113636_teacher12000/stage_gate_seed42": {
+      "flat_reference": {
+        "original_first_completed": 2,
+        "original_first_low_contact": 0,
+        "first_attempts": 2,
+        "diagnostic_excluding_global_step0_first_low_contact": 2,
+        "events_ge20n": [
+          {
+            "env_id": 0.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 193.16082763671875
+          },
+          {
+            "env_id": 1.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 158.20303344726562
+          }
+        ],
+        "peak_after_step0_n": 0.0
+      },
+      "step_up_06cm": {
+        "original_first_completed": 2,
+        "original_first_low_contact": 0,
+        "first_attempts": 2,
+        "diagnostic_excluding_global_step0_first_low_contact": 2,
+        "events_ge20n": [
+          {
+            "env_id": 2.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 219.30174255371094
+          },
+          {
+            "env_id": 3.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 224.1761932373047
+          }
+        ],
+        "peak_after_step0_n": 0.0
+      },
+      "step_down_08cm": {
+        "original_first_completed": 2,
+        "original_first_low_contact": 0,
+        "first_attempts": 2,
+        "diagnostic_excluding_global_step0_first_low_contact": 2,
+        "events_ge20n": [
+          {
+            "env_id": 4.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 221.97630310058594
+          },
+          {
+            "env_id": 5.0,
+            "episode_id": 0.0,
+            "step": 0.0,
+            "time_s": 0.0,
+            "nonfoot_force_peak_n": 155.23968505859375
+          }
+        ],
+        "peak_after_step0_n": 0.0
+      }
+    }
+  },
+  "checkpoint": {
+    "path": "rl/logs/rsl_rl/rp_wd_odin_teacher/2026-10-30_17-02-10_odin_basic_v20_20261030_113636_teacher18000/model_13400.pt",
+    "iteration": 13400,
+    "raw_action_std": [
+      1.713862419128418,
+      1.2249387502670288,
+      1.048069953918457,
+      1.197540521621704,
+      1.8629004955291748,
+      1.2889360189437866,
+      1.2221359014511108,
+      1.3677855730056763,
+      1.357125997543335,
+      1.105307698249817,
+      1.148132085800171,
+      0.9405174255371094,
+      2.622154712677002,
+      1.515734314918518,
+      1.6383506059646606,
+      2.8321340084075928
+    ],
+    "wheel_command_std_rad_s": [
+      13.11077356338501,
+      7.57867157459259,
+      8.191753029823303,
+      14.160670042037964
+    ],
+    "wheel_rim_target_std_m_s": [
+      1.3438542902469635,
+      0.7768138363957404,
+      0.8396546855568885,
+      1.4514686793088911
+    ],
+    "note": "名义Gaussian采样标准差，未计原始动作±10裁剪、PD/动力学与滑移；不是实际机身速度标准差。"
+  }
+}
