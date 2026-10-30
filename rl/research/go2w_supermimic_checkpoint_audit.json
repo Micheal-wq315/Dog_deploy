@@ -1,0 +1,483 @@
+{
+  "repository": "https://github.com/uwvwko-zzz/go2w-supermimic",
+  "commit": "a299ed5f5571da4492b8a286d94acfe4a86128e1",
+  "method": "仅CPU读取checkpoint，weights_only=True；未启动该仓库仿真。统计为训练课程累计，不是独立确定性验收。",
+  "snapshots": [
+    {
+      "checkpoint": "logs/go2w_terrain_v4_19500/model_19500.pt",
+      "step": 19500,
+      "history": 5,
+      "actor_input_dim": 265,
+      "env_steps": 31000,
+      "num_envs": 4096,
+      "terrain_revision": 4,
+      "horizon": 32,
+      "wm_window": 8,
+      "action_noise": 0.15,
+      "dt": 0.02,
+      "real_transitions": 126976000,
+      "mean_terrain_level": 3.976318359375,
+      "levels_by_type": {
+        "0": [
+          0,
+          0,
+          12,
+          19,
+          28,
+          351
+        ],
+        "1": [
+          26,
+          109,
+          339,
+          347,
+          163,
+          40
+        ],
+        "2": [
+          2,
+          3,
+          23,
+          60,
+          168,
+          563
+        ],
+        "3": [
+          1,
+          15,
+          42,
+          117,
+          154,
+          285
+        ],
+        "4": [
+          1,
+          1,
+          5,
+          26,
+          51,
+          326
+        ],
+        "5": [
+          2,
+          7,
+          29,
+          107,
+          227,
+          447
+        ]
+      }
+    },
+    {
+      "checkpoint": "logs/go2w_terrain_v4_40000/model_40000.pt",
+      "step": 40000,
+      "history": 5,
+      "actor_input_dim": 265,
+      "env_steps": 51500,
+      "num_envs": 4096,
+      "terrain_revision": 4,
+      "horizon": 32,
+      "wm_window": 8,
+      "action_noise": 0.15,
+      "dt": 0.02,
+      "real_transitions": 210944000,
+      "mean_terrain_level": 4.68603515625,
+      "levels_by_type": {
+        "0": [
+          0,
+          0,
+          0,
+          0,
+          2,
+          408
+        ],
+        "1": [
+          0,
+          28,
+          86,
+          211,
+          341,
+          358
+        ],
+        "2": [
+          0,
+          0,
+          0,
+          3,
+          57,
+          759
+        ],
+        "3": [
+          0,
+          0,
+          0,
+          1,
+          4,
+          609
+        ],
+        "4": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          409
+        ],
+        "5": [
+          0,
+          0,
+          0,
+          10,
+          61,
+          748
+        ]
+      }
+    },
+    {
+      "checkpoint": "logs/go2w_terrain_v7_15000/model_15000.pt",
+      "step": 15000,
+      "history": 5,
+      "actor_input_dim": 245,
+      "env_steps": 15000,
+      "num_envs": 4096,
+      "terrain_revision": 7,
+      "horizon": 32,
+      "wm_window": 8,
+      "action_noise": 0.15,
+      "dt": 0.02,
+      "real_transitions": 61440000,
+      "mean_terrain_level": 2.632080078125,
+      "levels_by_type": {
+        "0": [
+          62,
+          123,
+          103,
+          70,
+          37,
+          15
+        ],
+        "1": [
+          2,
+          48,
+          242,
+          612,
+          429,
+          100
+        ],
+        "2": [
+          0,
+          2,
+          9,
+          40,
+          165,
+          398
+        ],
+        "3": [
+          88,
+          125,
+          122,
+          64,
+          9,
+          2
+        ],
+        "4": [
+          63,
+          128,
+          109,
+          63,
+          35,
+          12
+        ],
+        "5": [
+          135,
+          264,
+          253,
+          139,
+          24,
+          4
+        ]
+      },
+      "command_stage": 1,
+      "velocity_ema": [
+        0.10235691734751243,
+        0.07267328255235425,
+        0.14587786105852388
+      ],
+      "stairs": {
+        "up": [
+          {
+            "height_cm": 2,
+            "trials": 1187,
+            "passed": 773,
+            "falls": 9,
+            "stuck": 0,
+            "pass_fraction": 0.6512215669755687
+          },
+          {
+            "height_cm": 4,
+            "trials": 3106,
+            "passed": 1671,
+            "falls": 65,
+            "stuck": 0,
+            "pass_fraction": 0.5379909851899549
+          },
+          {
+            "height_cm": 8,
+            "trials": 3426,
+            "passed": 1728,
+            "falls": 360,
+            "stuck": 0,
+            "pass_fraction": 0.5043782837127846
+          },
+          {
+            "height_cm": 12,
+            "trials": 2338,
+            "passed": 1310,
+            "falls": 505,
+            "stuck": 0,
+            "pass_fraction": 0.5603079555175363
+          },
+          {
+            "height_cm": 16,
+            "trials": 1125,
+            "passed": 401,
+            "falls": 637,
+            "stuck": 0,
+            "pass_fraction": 0.35644444444444445
+          },
+          {
+            "height_cm": 20,
+            "trials": 267,
+            "passed": 10,
+            "falls": 249,
+            "stuck": 0,
+            "pass_fraction": 0.03745318352059925
+          }
+        ],
+        "down": [
+          {
+            "height_cm": 2,
+            "trials": 306,
+            "passed": 241,
+            "falls": 1,
+            "stuck": 0,
+            "pass_fraction": 0.7875816993464052
+          },
+          {
+            "height_cm": 4,
+            "trials": 685,
+            "passed": 541,
+            "falls": 4,
+            "stuck": 0,
+            "pass_fraction": 0.7897810218978102
+          },
+          {
+            "height_cm": 8,
+            "trials": 888,
+            "passed": 673,
+            "falls": 13,
+            "stuck": 0,
+            "pass_fraction": 0.7578828828828829
+          },
+          {
+            "height_cm": 12,
+            "trials": 1038,
+            "passed": 759,
+            "falls": 26,
+            "stuck": 0,
+            "pass_fraction": 0.7312138728323699
+          },
+          {
+            "height_cm": 16,
+            "trials": 1132,
+            "passed": 798,
+            "falls": 53,
+            "stuck": 0,
+            "pass_fraction": 0.7049469964664311
+          },
+          {
+            "height_cm": 20,
+            "trials": 1393,
+            "passed": 915,
+            "falls": 187,
+            "stuck": 0,
+            "pass_fraction": 0.6568557071069634
+          }
+        ]
+      }
+    },
+    {
+      "checkpoint": "logs/go2w_terrain_v7_20000/model_20000.pt",
+      "step": 20000,
+      "history": 5,
+      "actor_input_dim": 245,
+      "env_steps": 20000,
+      "num_envs": 4096,
+      "terrain_revision": 7,
+      "horizon": 32,
+      "wm_window": 8,
+      "action_noise": 0.15,
+      "dt": 0.02,
+      "real_transitions": 81920000,
+      "mean_terrain_level": 3.157470703125,
+      "levels_by_type": {
+        "0": [
+          28,
+          80,
+          105,
+          86,
+          73,
+          38
+        ],
+        "1": [
+          0,
+          12,
+          74,
+          401,
+          631,
+          315
+        ],
+        "2": [
+          0,
+          0,
+          0,
+          16,
+          149,
+          449
+        ],
+        "3": [
+          45,
+          104,
+          131,
+          105,
+          21,
+          4
+        ],
+        "4": [
+          28,
+          78,
+          119,
+          83,
+          58,
+          44
+        ],
+        "5": [
+          57,
+          187,
+          272,
+          206,
+          84,
+          13
+        ]
+      },
+      "command_stage": 1,
+      "velocity_ema": [
+        0.10165385033861929,
+        0.07155857808131909,
+        0.147745211793761
+      ],
+      "stairs": {
+        "up": [
+          {
+            "height_cm": 2,
+            "trials": 1189,
+            "passed": 775,
+            "falls": 9,
+            "stuck": 0,
+            "pass_fraction": 0.6518082422203533
+          },
+          {
+            "height_cm": 4,
+            "trials": 3180,
+            "passed": 1721,
+            "falls": 65,
+            "stuck": 0,
+            "pass_fraction": 0.5411949685534592
+          },
+          {
+            "height_cm": 8,
+            "trials": 3912,
+            "passed": 2047,
+            "falls": 365,
+            "stuck": 0,
+            "pass_fraction": 0.5232617586912065
+          },
+          {
+            "height_cm": 12,
+            "trials": 3954,
+            "passed": 2474,
+            "falls": 582,
+            "stuck": 0,
+            "pass_fraction": 0.6256954982296409
+          },
+          {
+            "height_cm": 16,
+            "trials": 3025,
+            "passed": 1430,
+            "falls": 1219,
+            "stuck": 0,
+            "pass_fraction": 0.4727272727272727
+          },
+          {
+            "height_cm": 20,
+            "trials": 1201,
+            "passed": 216,
+            "falls": 915,
+            "stuck": 0,
+            "pass_fraction": 0.17985012489592006
+          }
+        ],
+        "down": [
+          {
+            "height_cm": 2,
+            "trials": 306,
+            "passed": 241,
+            "falls": 1,
+            "stuck": 0,
+            "pass_fraction": 0.7875816993464052
+          },
+          {
+            "height_cm": 4,
+            "trials": 686,
+            "passed": 542,
+            "falls": 4,
+            "stuck": 0,
+            "pass_fraction": 0.7900874635568513
+          },
+          {
+            "height_cm": 8,
+            "trials": 899,
+            "passed": 684,
+            "falls": 13,
+            "stuck": 0,
+            "pass_fraction": 0.760845383759733
+          },
+          {
+            "height_cm": 12,
+            "trials": 1127,
+            "passed": 838,
+            "falls": 26,
+            "stuck": 0,
+            "pass_fraction": 0.743566992014197
+          },
+          {
+            "height_cm": 16,
+            "trials": 1660,
+            "passed": 1226,
+            "falls": 57,
+            "stuck": 0,
+            "pass_fraction": 0.7385542168674699
+          },
+          {
+            "height_cm": 20,
+            "trials": 3092,
+            "passed": 2157,
+            "falls": 327,
+            "stuck": 0,
+            "pass_fraction": 0.6976067270375161
+          }
+        ]
+      }
+    }
+  ]
+}
