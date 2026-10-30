@@ -5,12 +5,13 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 
 class PipelineTests(unittest.TestCase):
-    def run_pipeline(self, fail_flat=False):
+    def run_pipeline(self, fail_flat=False, resume=False, continue_failure=False):
         root = Path(self.folder.name)
         scripts = root / "scripts"
         scripts.mkdir()
@@ -50,8 +51,17 @@ if os.environ.get('FAIL_FLAT')=='1': report['flat_reference'].update(first_compl
             path = scripts / name
             path.write_text(body)
             path.chmod(0o755)
-        result = subprocess.run(["bash", str(scripts / "train_odin_pipeline.sh"), "--num_envs", "256"],
+        arguments = ["bash", str(scripts / "train_odin_pipeline.sh"), "--num_envs", "256"]
+        if resume:
+            import torch
+            checkpoint = root / "model_1999.pt"
+            torch.save({"iter": 1999, "actor_state_dict": {}}, checkpoint)
+            arguments += ["--resume-teacher-checkpoint", str(checkpoint)]
+        if continue_failure:
+            arguments += ["--continue-on-stage-failure"]
+        result = subprocess.run(arguments,
                                 env={**os.environ, "RPWD_ODIN_PIPELINE_INHIBITED": "1",
+                                     "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
                                      "FAIL_FLAT": str(int(fail_flat))},
                                 capture_output=True, text=True, timeout=30)
         calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
@@ -78,6 +88,21 @@ if os.environ.get('FAIL_FLAT')=='1': report['flat_reference'].update(first_compl
         result, calls = self.run_pipeline(fail_flat=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(calls), 1)
+
+    def test_resume_skips_completed_stage(self):
+        result, calls = self.run_pipeline(resume=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([int(a[a.index("--max_iterations") + 1]) for a in calls],
+                         [6000, 12000, 18000, 2000])
+        self.assertEqual(calls[0][calls[0].index("--checkpoint") + 1], "model_1999.pt")
+        self.assertIn("--resume", calls[0])
+
+    def test_diagnostic_mode_continues_teacher_but_does_not_bypass_final_gate(self):
+        result, calls = self.run_pipeline(fail_flat=True, resume=True, continue_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([int(a[a.index("--max_iterations") + 1]) for a in calls],
+                         [6000, 12000, 18000])
+        self.assertTrue(all("Teacher" in a[a.index("--task") + 1] for a in calls))
 
 
 if __name__ == "__main__":

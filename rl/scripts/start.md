@@ -29,6 +29,11 @@
 
 # Odin1 v19：18000轮基础地形教师 → 三种子验收 → 2000轮含噪学生（共20000，headless）
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
+
+# 从已保存教师checkpoint接续两万轮流程；阶段性能未达标仅记录，最终资格门槛仍保留
+./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42 \
+  --resume-teacher-checkpoint /home/rmer/Dog_deploy-main/Dog_deploy-main/rl/logs/rsl_rl/rp_wd_odin_teacher/2026-10-29_22-50-43_odin_basic_v19_20261029_225031_teacher2000/model_1999.pt \
+  --continue-on-stage-failure
 # 分阶段续训学生，到学生阶段总目标2000轮
 ./rl/scripts/train_odin_depth.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Student-v0 \
   --resume --load_run <学生run名> --max_iterations 2000
@@ -41,7 +46,7 @@
 - 关键指标在 TensorBoard 里看 `Episode_Reward/*`（跟踪 vs 惩罚的配比）和 `Episode_Termination/*`
 - 深度相机使用离屏渲染；训练仍无 GUI，但比普通任务更占渲染资源
 - 教师：2000–10000轮扩展速度，14000–17000轮加入平地姿态/高度，15000–18000轮渐入小幅水平推扰；学生前1000轮渐入深度退化
-- 一键流程在2000/6000轮验平地并记录台阶诊断，12000轮验6cm上阶/8cm下阶，通过才续训；最终18000轮进行三种子基础验收。平地0.35m/s指令下实测vx需≥0.25m/s，未通过自动停止
+- 一键流程在2000/6000轮验平地并记录台阶诊断，12000轮验6cm上阶/8cm下阶，通过才续训；最终18000轮进行三种子基础验收。平地0.35m/s指令下实测vx需≥0.25m/s；默认未通过自动停止。显式加`--continue-on-stage-failure`仅允许阶段性能失败继续，最终教师验收仍需通过
 - 教师地形上限按0/2000/5000/9000/13000轮解锁0/2/5/8/11，最高单级8cm；四分之一专项环境长期复习0–2级；到达终点且无严重非足端撞击才升级。完整设计见 [CURRICULUM.md](../CURRICULUM.md)
 - 本轮专注平地、1–8cm上下阶/低障碍、起伏与缓坡，不混入绕墙训练；固定测试中的12cm箱与绕障只作诊断
 - 已移除所有电机力矩惩罚；12维腿部力矩观测仍保留
