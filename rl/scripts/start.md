@@ -36,22 +36,19 @@
   --experiment_name rp_wd_odin_teacher --run_name stairs_lift_v24_100k \
   --warm_start_checkpoint rl/logs/rsl_rl/rp_wd_odin_teacher/2026-10-30_17-02-10_odin_basic_v20_20261030_113636_teacher18000/model_13400.pt
 
-# SuperMimic 特权教师→深度学生（仅 codex/supermimic-teacher-student 分支提供）
-# 先完成特权 PPO 教师，再评测门槛，通过后启动学生在线蒸馏；两阶段不能并行。
-# 从主分支使用前先切换实验分支：git switch codex/supermimic-teacher-student
-./rl/scripts/train_odin_depth.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-SuperMimic-Teacher-v0 \
-  --num_envs 256 --seed 42 --max_iterations 100000 \
-  --experiment_name rp_wd_odin_supermimic_teacher --run_name privileged_teacher_v1
-./rl/scripts/train_odin_depth.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-SuperMimic-Student-v0 \
-  --num_envs 256 --seed 42 --max_iterations 5000 \
-  --experiment_name rp_wd_odin_supermimic_student --run_name depth_student_v1 \
-  --teacher_checkpoint rl/logs/rsl_rl/rp_wd_odin_supermimic_teacher/<教师run>/model_99999.pt
-./rl/scripts/test_policy.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-SuperMimic-Teacher-Play-v0 \
-  --checkpoint rl/logs/rsl_rl/rp_wd_odin_supermimic_teacher/<教师run>/model_99999.pt \
-  --terrain-level 2 --num_envs 12 --max_steps 1000 --cmd 0.35 0 0 --headless
-./rl/scripts/play.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0 \
-  --checkpoint rl/logs/rsl_rl/rp_wd_odin_supermimic_student/<学生run>/model_4999.pt
-# 设计与输入说明：rl/SUPERMIMIC_TEACHER_STUDENT.md
+# SuperMimic完整模型式版本（仅 codex/supermimic-adaptation 分支提供）
+# 教师：真实转移 + 世界模型 + 8步想象梯度Actor；学生：在线DAgger深度蒸馏。
+# 教师、学生按顺序运行。默认每次更新先采集24个50Hz仿真步，默认64环境。
+./rl/scripts/train_supermimic.sh --stage teacher --num_envs 64 \
+  --iterations 100000 --seed 42 --run_name wm_v1
+# 续训教师时使用 --resume_teacher /path/to/teacher_latest.pt，iterations填累计目标轮数
+./rl/scripts/train_supermimic.sh --stage student \
+  --teacher_checkpoint /path/to/teacher_final.pt \
+  --num_envs 64 --iterations 20000 --seed 42 --run_name odin_student_v1
+./rl/scripts/play_supermimic.sh \
+  --checkpoint /path/to/student_final.pt \
+  --num_envs 8
+# 设计、网络维度、保存路径与边界说明：rl/SUPERMIMIC_MODEL_BASED.md
 
 # 从已保存教师checkpoint接续两万轮流程；阶段性能未达标仅记录，最终资格门槛仍保留
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42 \

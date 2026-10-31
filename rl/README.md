@@ -3,8 +3,10 @@
 用 Isaac Lab (2.3.2 + Isaac Sim 5.1) + RSL-RL PPO 训练 RP_wd 四轮足机器人的速度跟踪策略，
 产出的 ONNX 直接对接本仓库的部署端推理节点 (`src/inference/robots/wheel_quad`)。
 
-SuperMimic 特权教师→Odin深度学生的独立实验仅在分支 `codex/supermimic-teacher-student` 中维护，
-方案、观测分组、权重迁移和两阶段命令见 [SUPERMIMIC_TEACHER_STUDENT.md](SUPERMIMIC_TEACHER_STUDENT.md)。
+SuperMimic模型式教师→Odin深度学生在独立分支 `codex/supermimic-adaptation` 开发：
+Isaac Lab转移回放→集成世界模型→想象轨迹梯度优化Actor→DAgger深度蒸馏，见
+[SUPERMIMIC_MODEL_BASED.md](SUPERMIMIC_MODEL_BASED.md)。旧版PPO教师/学生保留作对照，见
+[SUPERMIMIC_TEACHER_STUDENT.md](SUPERMIMIC_TEACHER_STUDENT.md)。
 
 ```
         训练侧 (本目录)                                部署侧 (src/inference)
@@ -15,6 +17,9 @@ SuperMimic 特权教师→Odin深度学生的独立实验仅在分支 `codex/sup
 └──────────────────────────────┘              └──────────────────────────────────┘
         rl/exported/policy_flat.onnx          src/inference/robots/wheel_quad/models/
 ```
+
+模型式分支另外提供`rp_wd_rl/supermimic/`与`train_supermimic.py`，不替换主线PPO训练入口；
+学生仍导出与部署相同的Odin `1740→16`接口。
 
 ## 目录结构
 

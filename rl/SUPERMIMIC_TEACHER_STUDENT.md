@@ -1,6 +1,6 @@
-# SuperMimic 启发的特权教师—深度学生方案
+# 历史版：SuperMimic启发的PPO教师—深度学生对照
 
-本方案只存在于分支 `codex/supermimic-teacher-student`，不改变 `main` 上现有 Odin PPO/蒸馏配置。它借鉴 Go2W SuperMimic 的“仿真训练时使用特权地形与动力学，部署策略只依赖可获得观测”原则，当前实现仍使用 PPO 教师和在线动作蒸馏；**尚未实现世界模型、想象轨迹或基于模型梯度的策略优化**。
+此文档记录首次迁移时的PPO教师/蒸馏原型，保留作算法对照。它不是完整SuperMimic世界模型实现。当前模型式主方案、训练入口与部署学生见 [SUPERMIMIC_MODEL_BASED.md](SUPERMIMIC_MODEL_BASED.md)，位于分支 `codex/supermimic-adaptation`。本文提到的`SuperMimic-Teacher-v0`和`SuperMimic-Student-v0`旧任务仍可作为PPO对照；模型式任务名带`SuperMimic-WM-`。
 
 ## 训练链路
 

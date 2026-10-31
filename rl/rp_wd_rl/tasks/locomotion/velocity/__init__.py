@@ -27,6 +27,20 @@ for _stage, _env_class, _runner_class in (
         },
     )
 
+# 世界模型阶段由 train_supermimic.py 自定义循环驱动，不走RSL-RL/PPO runner。
+for _stage, _env_class in (
+    ("Teacher", "RPWDOdinSuperMimicTeacherEnvCfg"),
+    ("Student", "RPWDOdinSuperMimicStudentEnvCfg"),
+):
+    gym.register(
+        id=f"Isaac-Velocity-Rough-RPWD-OdinDepth-SuperMimic-WM-{_stage}-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.rp_wd_odin_depth_env_cfg:{_env_class}",
+        },
+    )
+
 gym.register(
     id="Isaac-Velocity-Rough-RPWD-OdinDepth-SuperMimic-Teacher-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

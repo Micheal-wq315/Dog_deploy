@@ -255,7 +255,7 @@ class RPWDOdinSuperMimicObservationsCfg(RPWDOdinDepthObservationsCfg):
             self.flatten_history_dim = False
             self.concatenate_terms = True
 
-    # 蒸馏教师使用仿真扫描；无需额外计算干净深度记忆。
+    # 世界模型教师使用仿真扫描；学生训练用Odin相机深度记忆。
     depth_teacher: ObsGroup | None = None
     supermimic_terrain: ObsGroup = PrivilegedTerrainCfg()
     supermimic_state: ObsGroup = PrivilegedStateCfg()
@@ -263,7 +263,7 @@ class RPWDOdinSuperMimicObservationsCfg(RPWDOdinDepthObservationsCfg):
 
 @configclass
 class RPWDOdinSuperMimicTeacherObservationsCfg(RPWDOdinSuperMimicObservationsCfg):
-    """PPO教师不创建相机、不计算学生深度历史。"""
+    """模型式教师不创建相机、不计算学生深度历史。"""
 
     depth_memory: ObsGroup | None = None
 
@@ -373,12 +373,17 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
 
 @configclass
 class RPWDOdinSuperMimicTeacherEnvCfg(RPWDOdinDepthEnvCfg):
-    """特权PPO教师：16×12真值地形扫描与11维真实动力学/接触状态。"""
+    """特权模型式教师：16×12真值地形扫描与真实动力学/接触监督，不创建深度相机。"""
 
     scene: RPWDOdinSuperMimicTeacherSceneCfg = RPWDOdinSuperMimicTeacherSceneCfg(
         num_envs=256, env_spacing=2.5
     )
     observations: RPWDOdinSuperMimicTeacherObservationsCfg = RPWDOdinSuperMimicTeacherObservationsCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        # 教师场景不创建Odin相机，不能运行相机历史复位事件。
+        self.events.depth_memory_reset = None
 
 
 @configclass
@@ -432,7 +437,7 @@ class RPWDOdinDepthEnvCfg_STUDENT(RPWDOdinDepthEnvCfg):
 
 @configclass
 class RPWDOdinSuperMimicStudentEnvCfg(RPWDOdinDepthEnvCfg_STUDENT):
-    """特权教师在线蒸馏环境：学生仅使用原Odin深度和本体观测。"""
+    """模型式特权教师的在线DAgger环境：学生输入为Odin深度与本体观测。"""
 
     scene: RPWDOdinSuperMimicSceneCfg = RPWDOdinSuperMimicSceneCfg(
         num_envs=256, env_spacing=2.5
