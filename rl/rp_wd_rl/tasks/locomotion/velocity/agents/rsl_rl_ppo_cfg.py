@@ -132,7 +132,7 @@ class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
 
 @configclass
 class RPWDOdinTeacherRunnerCfg(RPWDOdinDepthPPORunnerCfg):
-    max_iterations = 18000
+    max_iterations = 100000
     experiment_name = "rp_wd_odin_teacher"
 
 

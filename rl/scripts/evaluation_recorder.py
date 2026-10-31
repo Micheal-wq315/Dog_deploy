@@ -34,7 +34,7 @@ def setup_plotting():
 
 
 class EvaluationRecorder:
-    """采样转移前状态，终止标记对应接下来一步，避免读取自动重置后的假终止姿态。"""
+    """采样物理转移后的复位前状态，接触与终止标记属于同一个控制区间。"""
 
     def __init__(self, directory, env, metadata, save_depth=False):
         self.directory = Path(directory).resolve()
@@ -44,9 +44,10 @@ class EvaluationRecorder:
         self.metadata = metadata
         self.save_depth = save_depth
         self.obstacle_benchmark = bool(metadata.get("obstacle_benchmark", False))
+        self.metadata["transition_sampling"] = "post_physics_pre_reset_v2"
         self.metadata.update(created_at=datetime.now().astimezone().isoformat(), step_dt=env.step_dt)
         self.metadata["notes"] = [
-            "状态在物理转移前采样，终止原因来自随后的转移；可能多个原因同时触发。",
+            "状态、接触和终止在物理步之后、自动复位之前同步采样；不含reset前残留，保留真实首次动作和终止步冲击。",
             "origin_height_m 是相对出生平台高度，不是机身到脚下地面的间隙。",
             "ImplicitActuator的applied_torque为裁剪后的PD估计力矩，不是PhysX直接测得的驱动力矩。",
             "测试为确定性策略、混合地形速度扫描，不代表指定高度台阶的通过率。",
@@ -125,15 +126,20 @@ class EvaluationRecorder:
         ], dim=1)
         return values.cpu().numpy()
 
-    def record(self, env, values):
-        dones = torch.stack([env.reset_terminated, env.reset_time_outs,
-                             *[env.termination_manager.get_term(name) for name in self.term_names]], dim=1).cpu().numpy()
+    def capture_transition(self, env):
+        manager = env.termination_manager
+        values = self.capture(env)
+        flags = torch.stack([manager.terminated, manager.time_outs,
+                             *[manager.get_term(name) for name in self.term_names]], dim=1).cpu().numpy().copy()
+        return values, flags
+
+    def record(self, env, values, dones):
         for i, (row, flags) in enumerate(zip(values, dones)):
             terrain_name = self.names.get(int(row[-1]), "plane")
             case = self.case
             if self.obstacle_benchmark:
                 case = terrain_name if self.case == "continuous" else f"{self.case}__{terrain_name}"
-            entry = {"step": self.step, "time_s": self.step * env.step_dt,
+            entry = {"step": self.step, "time_s": (self.step + 1) * env.step_dt,
                      "env_id": i, "episode_id": int(self.episodes[i]), "case": case, "phase": self.phase,
                      "terrain_name": terrain_name}
             entry.update(zip(self.columns, map(float, row)))

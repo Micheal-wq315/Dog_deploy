@@ -30,6 +30,22 @@ def odin_course_mask(env):
     return result
 
 
+def odin_kind_mask(env, kind):
+    """按地形类型分组，不能用列索引硬编码猜测上阶环境。"""
+    terrain = env.scene.terrain
+    cfgs = list(terrain.cfg.terrain_generator.sub_terrains.values())
+    total = sum(cfg.proportion for cfg in cfgs)
+    column = (terrain.terrain_types.float()+.5) / terrain.cfg.terrain_generator.num_cols
+    mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    cumulative = 0.
+    for cfg in cfgs:
+        lower = cumulative / total
+        cumulative += cfg.proportion
+        if getattr(cfg, "course_kind", "manual") == kind:
+            mask |= (column >= lower) & (column < cumulative / total)
+    return mask
+
+
 class OdinCourseVelocityCommand(UniformVelocityCommand):
     """将训练目标编码为既有 [vx, vy, wz]，专项赛道终点始终在出生点前方。"""
 
@@ -41,6 +57,8 @@ class OdinCourseVelocityCommand(UniformVelocityCommand):
         self.previous_distance = torch.zeros_like(self.speed)
         self.progress_speed = torch.zeros_like(self.speed)
         self.max_nonfoot_force = torch.zeros_like(self.speed)
+        self.error_sum = torch.zeros_like(self.speed)
+        self.quality_steps = torch.zeros_like(self.speed)
         self._state_step = -1
         self.nonfoot_ids, _ = env.scene["contact_forces"].find_bodies(
             ["base_link", ".*_ABAD_LINK", ".*_HIP_LINK", ".*_KENN_LINK"]
@@ -58,6 +76,8 @@ class OdinCourseVelocityCommand(UniformVelocityCommand):
         sensor = self._env.scene["contact_forces"]
         force = sensor.data.net_forces_w_history[:, :, self.nonfoot_ids].norm(dim=-1).amax(dim=(1, 2))
         self.max_nonfoot_force = torch.maximum(self.max_nonfoot_force, force)
+        self.error_sum += (self.command[:, :2] - self.robot.data.root_lin_vel_b[:, :2]).norm(dim=1)
+        self.quality_steps += 1
         self._state_step = self._env.common_step_counter
 
     def reset(self, env_ids=None):
@@ -73,6 +93,9 @@ class OdinCourseVelocityCommand(UniformVelocityCommand):
         )
         self.progress_speed[ids] = 0.0
         self.max_nonfoot_force[ids] = 0.0
+        if hasattr(self, "error_sum"):
+            self.error_sum[ids] = 0.
+            self.quality_steps[ids] = 0.
         # 同步新指令，避免复位后首个观测携带上一地块的目标方向。
         self._update_command()
         return extras
@@ -219,7 +242,7 @@ def contact_load_excess(env, sensor_cfg: SceneEntityCfg, threshold: float = 180.
 
 
 def odin_safe_terrain_levels(env, env_ids, max_level_schedule, max_nonfoot_force: float = 120.0,
-                             rehearsal_stride: int = 0, rehearsal_max_level: int = 2):
+                             rehearsal_stride: int = 0, rehearsal_max_level: int = 2, performance_gate: bool = False):
     """到达终点且未发生严重非足端撞击才升级；失败降级，平地始终为0级。"""
     term = env.command_manager.get_term("base_velocity")
     term.refresh_progress()
@@ -231,9 +254,28 @@ def odin_safe_terrain_levels(env, env_ids, max_level_schedule, max_nonfoot_force
             cap = level
     cap = min(cap, terrain.terrain_origins.shape[0] - 1)
     caps = torch.full_like(ids, cap)
+    if performance_gate:
+        from rp_wd_rl.stair_logic import PerformanceGate
+        if not hasattr(env, "_odin_performance_gate"):
+            env._odin_performance_gate = PerformanceGate(env.device)
+        groups = torch.full((env.num_envs,), 2, device=env.device, dtype=torch.long)
+        groups[odin_kind_mask(env, "stairs_up")] = 0
+        groups[odin_kind_mask(env, "stairs_down")] = 1
+        completed = ids[(env.episode_length_buf[ids] > 0) & term.course_mask[ids]]
+        success = odin_goal_success(env)
+        error = term.error_sum / term.quality_steps.clamp_min(1)
+        clean = (term.max_nonfoot_force < 20.) & success
+        gate = env._odin_performance_gate
+        gate.record(groups[completed], terrain.terrain_levels[completed], success[completed],
+                    clean[completed], error[completed], cap)
+        caps = torch.minimum(caps, gate.cap[groups[ids]])
+        # 速度随最薄弱的上下阶组开放；平地也避免在基础上阶未稳定时提前扩速。
+        env._odin_quality_scale = float(.5 + .5 * gate.cap[:2].min().item() / 11)
+        for group, name in enumerate(("up", "down", "other")):
+            term.metrics[f"quality_cap_{name}"] = torch.full_like(term.speed, float(gate.cap[group]))
     if rehearsal_stride > 0:
         # 固定一部分环境长期复习低难度，仍需安全成功才升级，不随机跳级。
-        caps = torch.where(ids.remainder(rehearsal_stride) == 0, min(cap, rehearsal_max_level), caps)
+        caps = torch.where(ids.remainder(rehearsal_stride) == 0, caps.clamp(max=rehearsal_max_level), caps)
     success = odin_goal_success(env)[ids]
     safe = term.max_nonfoot_force[ids] < max_nonfoot_force
     up = success & safe & term.course_mask[ids] & (terrain.terrain_levels[ids] < caps)

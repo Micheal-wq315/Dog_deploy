@@ -64,6 +64,7 @@ def command_lin_vel_curriculum(
         progress = min(1.0, (counter - warmup_steps) / max(ramp_steps, 1))
         scale = start_scale + (end_scale - start_scale) * progress
 
+    scale = min(scale, getattr(env, "_odin_quality_scale", 1.0))
     term = env.command_manager.get_term(command_name)
     ranges = term.cfg.ranges
     ranges.lin_vel_x = (CMD_VX_RANGE[0] * scale, CMD_VX_RANGE[1] * scale)

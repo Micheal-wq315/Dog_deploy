@@ -37,6 +37,8 @@ parser.add_argument("--resume", action="store_true", default=False, help="从 ch
 parser.add_argument("--load_run", type=str, default=None, help="要加载的 run 目录 (正则, 默认最新).")
 parser.add_argument("--checkpoint", type=str, default=None, help="要加载的模型文件名 (正则, 默认 model_.*.pt).")
 parser.add_argument("--teacher_checkpoint", type=str, default=None, help="学生在线蒸馏使用的 PPO 教师 checkpoint。")
+parser.add_argument("--warm_start_checkpoint", type=str, default=None,
+                    help="只加载 PPO actor/critic 权重并从第0轮开始新训练；不恢复优化器和课程时钟。")
 parser.add_argument("--logger", type=str, default=None, choices=["tensorboard", "wandb", "neptune"])
 parser.add_argument("--log_project_name", type=str, default=None, help="wandb/neptune 项目名.")
 AppLauncher.add_app_launcher_args(parser)
@@ -67,7 +69,7 @@ from datetime import datetime  # noqa: E402
 import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
 from rsl_rl.runners import OnPolicyRunner, DistillationRunner  # noqa: E402
-from policy_checkpoint import initialize_student  # noqa: E402
+from policy_checkpoint import initialize_student, warm_start_policy  # noqa: E402
 
 from isaaclab.envs import ManagerBasedRLEnvCfg  # noqa: E402
 from isaaclab.utils.dict import print_dict  # noqa: E402
@@ -129,6 +131,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         agent_cfg.neptune_project = args_cli.log_project_name
     if args_cli.resume:
         agent_cfg.resume = True
+    if args_cli.warm_start_checkpoint and (args_cli.resume or args_cli.teacher_checkpoint):
+        raise ValueError("--warm_start_checkpoint 不能与 --resume 或 --teacher_checkpoint 同时使用。")
     if args_cli.load_run is not None:
         agent_cfg.load_run = args_cli.load_run
     if args_cli.checkpoint is not None:
@@ -183,16 +187,35 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         raise ValueError("--teacher_checkpoint 只用于学生新训练；学生续训请使用 --resume。")
     runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     runner.add_git_repo_to_log(__file__)
+    original_save = runner.save
+
+    def save_with_odin_course_state(path, infos=None):
+        saved_infos = dict(infos or {})
+        gate = getattr(env.unwrapped, "_odin_performance_gate", None)
+        if gate is not None:
+            saved_infos["odin_performance_gate"] = gate.state_dict()
+        return original_save(path, saved_infos or None)
+
+    runner.save = save_with_odin_course_state
     if args_cli.teacher_checkpoint:
         initialize_student(runner, args_cli.teacher_checkpoint)
         print(f"[INFO] 学生与教师权重已初始化: {args_cli.teacher_checkpoint}")
+    if args_cli.warm_start_checkpoint:
+        warm_start_policy(runner, args_cli.warm_start_checkpoint)
     if agent_cfg.resume:
         print(f"[INFO] 加载模型: {resume_path}")
-        runner.load(resume_path)
+        resume_infos = runner.load(resume_path)
         # RSL-RL checkpoint 的 iter 是最后已完成的索引。下一次从 iter+1 开始，
         # 并恢复课程时钟，避免续训后速度/感知/力矩课程重新从第 0 轮计时。
         runner.current_learning_iteration = int(runner.current_learning_iteration) + 1
         env.unwrapped.common_step_counter = runner.current_learning_iteration * agent_cfg.num_steps_per_env
+        gate_state = (resume_infos or {}).get("odin_performance_gate")
+        if gate_state is not None:
+            from rp_wd_rl.stair_logic import PerformanceGate
+            gate = PerformanceGate(env.unwrapped.device)
+            gate.load_state_dict(gate_state)
+            env.unwrapped._odin_performance_gate = gate
+            print(f"[INFO] 已从 checkpoint 恢复台阶课程表现门槛: {gate.cap.tolist()}")
         env.reset()
 
     remaining_iterations = agent_cfg.max_iterations - runner.current_learning_iteration

@@ -30,6 +30,12 @@
 # Odin1 v19：18000轮基础地形教师 → 三种子验收 → 2000轮含噪学生（共20000，headless）
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
 
+# Odin1 v24：热启动旧教师权重，重置优化器/课程时钟，开始全新100000轮课程（headless）
+./rl/scripts/train_odin_depth.sh --task Isaac-Velocity-Rough-RPWD-OdinDepth-Teacher-v0 \
+  --num_envs 256 --seed 42 --max_iterations 100000 \
+  --experiment_name rp_wd_odin_teacher --run_name stairs_lift_v24_100k \
+  --warm_start_checkpoint rl/logs/rsl_rl/rp_wd_odin_teacher/2026-10-30_17-02-10_odin_basic_v20_20261030_113636_teacher18000/model_13400.pt
+
 # 从已保存教师checkpoint接续两万轮流程；阶段性能未达标仅记录，最终资格门槛仍保留
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42 \
   --resume-teacher-checkpoint /home/rmer/Dog_deploy-main/Dog_deploy-main/rl/logs/rsl_rl/rp_wd_odin_teacher/2026-10-29_22-50-43_odin_basic_v19_20261029_225031_teacher2000/model_1999.pt \
@@ -45,15 +51,15 @@
 - 训练期间**自动阻止系统休眠**（`systemd-inhibit`），夜间不会被冻死
 - 关键指标在 TensorBoard 里看 `Episode_Reward/*`（跟踪 vs 惩罚的配比）和 `Episode_Termination/*`
 - 深度相机使用离屏渲染；训练仍无 GUI，但比普通任务更占渲染资源
-- 教师：2000–10000轮扩展速度，14000–17000轮加入平地姿态/高度，15000–18000轮渐入小幅水平推扰；学生前1000轮渐入深度退化
+- v24教师课程：0–100000轮分段训练；地形等级按策略质量与课程时钟共同开放，速度约从10000轮后扩至契约范围，50000轮后渐入姿态/高度，75000–90000轮加入小幅水平推扰。详见 [CURRICULUM.md](../CURRICULUM.md)
 - 一键流程在2000/6000轮验平地并记录台阶诊断，12000轮验6cm上阶/8cm下阶，通过才续训；最终18000轮进行三种子基础验收。平地0.35m/s指令下实测vx需≥0.25m/s；默认未通过自动停止。显式加`--continue-on-stage-failure`仅允许阶段性能失败继续，最终教师验收仍需通过
-- 教师地形上限按0/2000/5000/9000/13000轮解锁0/2/5/8/11，最高单级8cm；四分之一专项环境长期复习0–2级；到达终点且无严重非足端撞击才升级。完整设计见 [CURRICULUM.md](../CURRICULUM.md)
+- v24教师抬腿奖励按轮端首次增加的有效抬升量给分，越阶、连续稳定着地和整级通过分别奖励；保持悬轮不会持续刷分，猛烈落地不计入干净通过
 - 本轮专注平地、1–8cm上下阶/低障碍、起伏与缓坡，不混入绕墙训练；固定测试中的12cm箱与绕障只作诊断
 - 已移除所有电机力矩惩罚；12维腿部力矩观测仍保留
 - OdinDepth 当前输入契约为1740→16（68×3本体/力矩 + 8×16×12深度记忆）；旧780维 checkpoint 不兼容，需新模型
 - 深度原图默认逆时针旋转90°，adapter由22帧历史间隔3帧抽8张（约1.4秒）；旧1740维模型回放用`--depth-memory-stride 1`、ROS用`memory_stride:=1`。实物方向相反时启动adapter时设 `rotation_deg:=270`
 - 高度奖励与低高度终止改用机身正下方地面射线，按实际地面评估站姿净空
-- `--max_iterations` 表示包含已完成轮数的总目标；续训恢复课程步数，从 checkpoint 下一轮开始
+- `--max_iterations` 表示总目标轮数；`--resume` 恢复模型、优化器、迭代和表现门槛状态；`--warm_start_checkpoint` 只迁移 actor/critic 权重，从新课程第0轮开始并重置优化器/探索噪声
 
 ```bash
 tail -f rl/logs/train_rolling_*.log                      # 实时看迭代/回报

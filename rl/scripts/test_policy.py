@@ -281,16 +281,21 @@ def format_line(step: int, m: dict, rew: float) -> str:
 
 
 def step_once(env, wrapped, policy) -> tuple[float, int]:
-    """策略走一步，保存转移前状态及转移终止原因；超时单独计数。"""
+    """策略走一步，保存物理转移后、自动复位前的状态；超时单独计数。"""
     with torch.inference_mode():
         recorder = getattr(env, "evaluation_recorder", None)
-        before = recorder.capture(env) if recorder is not None else None
         obs = wrapped.get_observations()
         act = policy(obs)
-        _, rew, dones, _ = wrapped.step(act)
+        if recorder is None:
+            _, rew, dones, _ = wrapped.step(act)
+        else:
+            from transition_capture import capture_before_reset
+            # 第一帧也来自真实物理转移；不把reset残留计为策略接触，不漏终止步撞击。
+            with capture_before_reset(env.termination_manager, lambda: recorder.capture_transition(env)) as snapshots:
+                _, rew, dones, _ = wrapped.step(act)
+            values, flags = snapshots[0]
+            recorder.record(env, values, flags)
         policy.reset(dones)
-        if recorder is not None:
-            recorder.record(env, before)
     return rew.mean().item(), int(env.reset_terminated.sum())
 
 

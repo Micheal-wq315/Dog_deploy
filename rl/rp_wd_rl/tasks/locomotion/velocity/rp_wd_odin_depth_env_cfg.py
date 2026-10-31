@@ -149,8 +149,8 @@ class RPWDOdinDepthObservationsCfg(ObservationsCfg):
                 "dropout_prob": 0.01,
                 "crop_fraction_range": (0.95, 1.0),
                 "random_crop": True,
-                "augmentation_warmup_steps": 12_000,
-                "augmentation_ramp_steps": 48_000,
+                "augmentation_warmup_steps": 1_200_000,
+                "augmentation_ramp_steps": 480_000,
                 "memory_frames": ODIN_DEPTH_MEMORY_FRAMES,
                 "episode_bias_m": 0.04,
                 "scale_error": 0.02,
@@ -216,26 +216,28 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
         )
         self.commands.base_posture.zero_on_course = True
         self.events.reset_base.func = mdp.reset_odin_course_root
+        self.events.stair_reward_reset = EventTerm(func=mdp.reset_stair_events, mode="reset")
         self.events.depth_memory_reset = EventTerm(func=mdp.reset_odin_depth_memory, mode="reset")
         self.curriculum.terrain_levels = CurrTerm(
             func=mdp.odin_safe_terrain_levels,
-            params={"max_level_schedule": ((0, 0), (48_000, 2), (120_000, 5), (216_000, 8), (312_000, 11)),
-                    "rehearsal_stride": 4, "rehearsal_max_level": 2},
+            params={"max_level_schedule": ((0, 0), (240_000, 1), (720_000, 4),
+                                             (1_320_000, 7), (1_920_000, 11)),
+                    "rehearsal_stride": 4, "rehearsal_max_level": 2, "performance_gate": True},
         )
         self.curriculum.command_lin_vel.params.update(
-            start_scale=0.6, end_scale=1.0, warmup_steps=48_000,
-            ramp_steps=192_000, ramp_angular=True,
+            start_scale=0.5, end_scale=1.0, warmup_steps=240_000,
+            ramp_steps=720_000, ramp_angular=True,
         )
         self.curriculum.posture_command.params.update(
             start_scale=0.0, end_scale=1.0,
-            warmup_steps=336_000, ramp_steps=72_000,
+            warmup_steps=1_200_000, ramp_steps=360_000,
         )
         self.events.push_robot.params["velocity_range"] = {
             "x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)
         }
         self.curriculum.push_curriculum = CurrTerm(
             func=mdp.push_velocity_curriculum,
-            params={"start_step": 360_000, "ramp_steps": 72_000,
+            params={"start_step": 1_800_000, "ramp_steps": 360_000,
                     "max_push_x": 0.15, "max_push_y": 0.10, "max_push_z": 0.0},
         )
         self.rewards.track_lin_vel_xy_exp.func = mdp.odin_course_tracking
@@ -243,6 +245,11 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
         self.rewards.track_lin_vel_xy_exp.params = {"std": 0.25}
         self.rewards.track_ang_vel_z_exp.func = mdp.odin_course_yaw_tracking
         self.rewards.track_ang_vel_z_exp.params = {"std": 0.5}
+        # 正奖励取每只轮端本回合内首次新增的抬升高度；不奖励悬轮驻留。
+        self.rewards.stair_clearance = RewTerm(func=mdp.stair_clearance, weight=30.0)
+        self.rewards.stair_crossing = RewTerm(func=mdp.stair_crossing, weight=30.0)
+        self.rewards.stair_landing = RewTerm(func=mdp.stair_landing, weight=60.0)
+        self.rewards.stair_stage_complete = RewTerm(func=mdp.stair_stage_complete, weight=80.0)
         self.rewards.goal_progress = RewTerm(func=mdp.odin_goal_progress, weight=3.0)
         self.rewards.goal_success = RewTerm(func=mdp.odin_goal_success, weight=250.0)
         self.rewards.termination_penalty.func = mdp.odin_failure
@@ -286,7 +293,7 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
 
 @configclass
 class RPWDOdinDepthEnvCfg_TEACHER(RPWDOdinDepthEnvCfg):
-    """18000轮基础地形 PPO 教师，长期巩固运动和上下台阶。"""
+    """十万轮基础地形 PPO 教师，按通过质量渐进解锁地形。"""
 
     def __post_init__(self):
         super().__post_init__()
@@ -299,7 +306,7 @@ class RPWDOdinDepthEnvCfg_TEACHER(RPWDOdinDepthEnvCfg):
 
 @configclass
 class RPWDOdinDepthEnvCfg_STUDENT(RPWDOdinDepthEnvCfg):
-    """2000轮在线蒸馏，教师使用同视野清晰历史，学生使用退化深度。"""
+    """在线蒸馏，教师使用同视野清晰历史，学生使用退化深度。"""
 
     def __post_init__(self):
         super().__post_init__()
@@ -329,6 +336,8 @@ class RPWDOdinDepthEnvCfg_PLAY(RPWDOdinDepthEnvCfg):
         self.rewards.track_ang_vel_z_exp.func = mdp.track_ang_vel_z_exp
         self.rewards.track_ang_vel_z_exp.params = {"command_name": "base_velocity", "std": 0.5}
         self.rewards.goal_progress = self.rewards.goal_success = None
+        self.rewards.stair_clearance = self.rewards.stair_crossing = None
+        self.rewards.stair_landing = self.rewards.stair_stage_complete = None
         self.terminations.goal_reached = self.terminations.course_bounds = None
         self.scene.num_envs = 8
         self.observations.policy.enable_corruption = False
