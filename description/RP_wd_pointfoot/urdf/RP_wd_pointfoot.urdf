@@ -80,28 +80,34 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="../../RP_wd/urdf/meshes/LF_KENN_LINK.STL"/>
+          <mesh filename="meshes/go2_calf.dae"/>
         </geometry>
         <material name="LF_KENN_LINK_visual_0">
           <color rgba="1.00000000 1.00000000 1.00000000 1.00000000"/>
         </material>
       </visual>
       <collision>
-        <origin xyz="0.016 0.006 -0.08" rpy="0.122173 -0.1396263 0"/>
+        <origin xyz="0.008 0 -0.06" rpy="0 -0.21 0"/>
         <geometry>
-          <cylinder radius="0.02" length="0.18"/>
+          <cylinder length="0.12" radius="0.012"/>
         </geometry>
       </collision>
       <collision>
-        <origin xyz="0 0.021 -0.22" rpy="1.5707963 0 0"/>
+        <origin xyz="0.020 0 -0.148" rpy="0 0.05 0"/>
         <geometry>
-          <cylinder radius="0.045" length="0.03"/>
+          <cylinder length="0.065" radius="0.011"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0.008 0 -0.18745" rpy="0 0.53 0"/>
+        <geometry>
+          <cylinder length="0.03" radius="0.0155"/>
         </geometry>
       </collision>
       <inertial>
-        <origin xyz="0.0039019 0.0253379 -0.1888436" rpy="0 0 0"/>
-        <mass value="0.636513"/>
-        <inertia ixx="0.0027405" ixy="0.0000325" ixz="-0.0001755" iyy="0.002845" iyz="0.0003959" izz="0.0003994"/>
+        <origin xyz="0.00548 -0.000975 -0.115" rpy="0 0 0"/>
+        <mass value="0.154"/>
+        <inertia ixx="0.00108" ixy="3.4E-07" ixz="1.72E-05" iyy="0.0011" iyz="8.28E-06" izz="3.29E-05"/>
       </inertial>
     </link>
 
@@ -183,28 +189,34 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="../../RP_wd/urdf/meshes/RF_KENN_LINK.STL"/>
+          <mesh filename="meshes/go2_calf_mirror.dae"/>
         </geometry>
         <material name="RF_KENN_LINK_visual_0">
           <color rgba="1.00000000 1.00000000 1.00000000 1.00000000"/>
         </material>
       </visual>
       <collision>
-        <origin xyz="0.016 -0.006 -0.08" rpy="-0.122173 -0.1396263 0"/>
+        <origin xyz="0.01 0 -0.06" rpy="0 -0.2 0"/>
         <geometry>
-          <cylinder radius="0.02" length="0.18"/>
+          <cylinder length="0.12" radius="0.013"/>
         </geometry>
       </collision>
       <collision>
-        <origin xyz="0 -0.021 -0.22" rpy="-1.5707963 0 0"/>
+        <origin xyz="0.020 0 -0.148" rpy="0 0.05 0"/>
         <geometry>
-          <cylinder radius="0.045" length="0.03"/>
+          <cylinder length="0.065" radius="0.011"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0.008 0 -0.18745" rpy="0 0.53 0"/>
+        <geometry>
+          <cylinder length="0.03" radius="0.0155"/>
         </geometry>
       </collision>
       <inertial>
-        <origin xyz="0.0039019 -0.0253379 -0.1888436" rpy="0 0 0"/>
-        <mass value="0.636513"/>
-        <inertia ixx="0.0027405" ixy="-0.0000325" ixz="-0.0001755" iyy="0.002845" iyz="-0.0003959" izz="0.0003994"/>
+        <origin xyz="0.00548 0.000975 -0.115" rpy="0 0 0"/>
+        <mass value="0.154"/>
+        <inertia ixx="0.00108" ixy="-3.4E-07" ixz="1.72E-05" iyy="0.0011" iyz="-8.28E-06" izz="3.29E-05"/>
       </inertial>
     </link>
 
@@ -286,28 +298,34 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="../../RP_wd/urdf/meshes/LB_KENN_LINK.STL"/>
+          <mesh filename="meshes/go2_calf.dae"/>
         </geometry>
         <material name="LB_KENN_LINK_visual_0">
           <color rgba="1.00000000 1.00000000 1.00000000 1.00000000"/>
         </material>
       </visual>
       <collision>
-        <origin xyz="0.016 0.006 -0.08" rpy="0.122173 -0.1396263 0"/>
+        <origin xyz="0.008 0 -0.06" rpy="0 -0.21 0"/>
         <geometry>
-          <cylinder radius="0.02" length="0.18"/>
+          <cylinder length="0.12" radius="0.012"/>
         </geometry>
       </collision>
       <collision>
-        <origin xyz="0 0.021 -0.22" rpy="1.5707963 0 0"/>
+        <origin xyz="0.020 0 -0.148" rpy="0 0.05 0"/>
         <geometry>
-          <cylinder radius="0.045" length="0.03"/>
+          <cylinder length="0.065" radius="0.011"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0.008 0 -0.18745" rpy="0 0.53 0"/>
+        <geometry>
+          <cylinder length="0.03" radius="0.0155"/>
         </geometry>
       </collision>
       <inertial>
-        <origin xyz="0.0039019 0.0253379 -0.1888436" rpy="0 0 0"/>
-        <mass value="0.636513"/>
-        <inertia ixx="0.0027405" ixy="0.0000325" ixz="-0.0001755" iyy="0.002845" iyz="0.0003959" izz="0.0003994"/>
+        <origin xyz="0.00548 -0.000975 -0.115" rpy="0 0 0"/>
+        <mass value="0.154"/>
+        <inertia ixx="0.00108" ixy="3.4E-07" ixz="1.72E-05" iyy="0.0011" iyz="8.28E-06" izz="3.29E-05"/>
       </inertial>
     </link>
 
@@ -389,28 +407,34 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="../../RP_wd/urdf/meshes/RB_KENN_LINK.STL"/>
+          <mesh filename="meshes/go2_calf_mirror.dae"/>
         </geometry>
         <material name="RB_KENN_LINK_visual_0">
           <color rgba="1.00000000 1.00000000 1.00000000 1.00000000"/>
         </material>
       </visual>
       <collision>
-        <origin xyz="0.016 -0.006 -0.08" rpy="-0.122173 -0.1396263 0"/>
+        <origin xyz="0.01 0 -0.06" rpy="0 -0.2 0"/>
         <geometry>
-          <cylinder radius="0.02" length="0.18"/>
+          <cylinder length="0.12" radius="0.013"/>
         </geometry>
       </collision>
       <collision>
-        <origin xyz="0 -0.021 -0.22" rpy="-1.5707963 0 0"/>
+        <origin xyz="0.020 0 -0.148" rpy="0 0.05 0"/>
         <geometry>
-          <cylinder radius="0.045" length="0.03"/>
+          <cylinder length="0.065" radius="0.011"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0.008 0 -0.18745" rpy="0 0.53 0"/>
+        <geometry>
+          <cylinder length="0.03" radius="0.0155"/>
         </geometry>
       </collision>
       <inertial>
-        <origin xyz="0.0039019 -0.0253379 -0.1888436" rpy="0 0 0"/>
-        <mass value="0.636513"/>
-        <inertia ixx="0.0027405" ixy="-0.0000325" ixz="-0.0001755" iyy="0.002845" iyz="-0.0003959" izz="0.0003994"/>
+        <origin xyz="0.00548 0.000975 -0.115" rpy="0 0 0"/>
+        <mass value="0.154"/>
+        <inertia ixx="0.00108" ixy="-3.4E-07" ixz="1.72E-05" iyy="0.0011" iyz="-8.28E-06" izz="3.29E-05"/>
       </inertial>
     </link>
 
@@ -463,7 +487,7 @@
   <joint name="LF_FOOT_FIXED_JOINT" type="fixed">
     <parent link="LF_KENN_LINK"/>
     <child link="LF_FOOT_LINK"/>
-    <origin xyz="0 0 -0.322756" rpy="0 0 0"/>
+    <origin xyz="0 0 -0.213" rpy="0 0 0"/>
   </joint>
 
   <joint name="RF_ABAD_JOINT" type="revolute">
@@ -493,7 +517,7 @@
   <joint name="RF_FOOT_FIXED_JOINT" type="fixed">
     <parent link="RF_KENN_LINK"/>
     <child link="RF_FOOT_LINK"/>
-    <origin xyz="0 0 -0.322756" rpy="0 0 0"/>
+    <origin xyz="0 0 -0.213" rpy="0 0 0"/>
   </joint>
 
   <joint name="LB_ABAD_JOINT" type="revolute">
@@ -523,7 +547,7 @@
   <joint name="LB_FOOT_FIXED_JOINT" type="fixed">
     <parent link="LB_KENN_LINK"/>
     <child link="LB_FOOT_LINK"/>
-    <origin xyz="0 0 -0.322756" rpy="0 0 0"/>
+    <origin xyz="0 0 -0.213" rpy="0 0 0"/>
   </joint>
 
   <joint name="RB_ABAD_JOINT" type="revolute">
@@ -553,6 +577,6 @@
   <joint name="RB_FOOT_FIXED_JOINT" type="fixed">
     <parent link="RB_KENN_LINK"/>
     <child link="RB_FOOT_LINK"/>
-    <origin xyz="0 0 -0.322756" rpy="0 0 0"/>
+    <origin xyz="0 0 -0.213" rpy="0 0 0"/>
   </joint>
 </robot>
