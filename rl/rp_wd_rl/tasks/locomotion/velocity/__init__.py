@@ -87,6 +87,16 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-Velocity-Rough-RPWD-Pointfoot-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.rp_wd_pointfoot_env_cfg:RPWDPointfootEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:RPWDPointfootPPORunnerCfg",
+    },
+)
+
+gym.register(
     id="Isaac-Velocity-Rough-RPWD-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,

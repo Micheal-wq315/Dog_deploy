@@ -306,6 +306,7 @@ GPU 利用率 1%、**空转 12.8 小时**只跑到 101/3000。journal 无 OOM �
 
 | 日期 | 版本 | 内容 |
 |---|---|---|
+| 2026-10-31 | RPWD-PointFoot-Train-v1 | 新增独立 Go2 点足训练任务：URDF 由 Isaac Lab 运行时转换，保留四个固定球脚接触刚体，动作12维、单帧观测45维/三帧输入135维；加入速度课程、基于实际行走表现的台阶地形课程（上阶最高16cm、下阶最高14cm）以及足端腾空/滑移、姿态、平顺奖励，不含力矩惩罚。2048环境、20000轮、seed42 的无头训练已启动，模型运行名为“大狗点足版”，日志目录 rl/logs/rsl_rl/rp_wd_pointfoot/2026-10-31_21-06-55_大狗点足版/；启动冒烟1轮通过，正式训练起步阶段尚无可用于评估的策略。轮足版训练任务和16维部署契约未改。 |
 | 2026-10-31 | RPwd-PointFoot-URDF-v2 | 根据Isaac Sim导入截图修正点足结构：原RP_wd KENN小腿网格和远端轮毂碰撞体会保留轮足电机外观；现替换为Go2 calf/calf_mirror网格与对应小腿碰撞/惯量，将固定脚连接点从-0.322756m改为Go2 calf末端-0.213m。模型为12个腿关节驱动、脚端固定球，无轮毂网格或脚端执行器。重新计算默认腿角下触地base高度约0.3403m，总质量约17.038kg。`check_urdf`及网格引用检查通过；Isaac Sim 5.1导入器识别四个calf和四个foot网格、USD场景成功打开。未运行物理仿真；点足动力学、站立配置和训练仍未实现。 |
 | 2026-10-31 | RPwd-PointFoot-URDF-v1 | 新增独立的`description/RP_wd_pointfoot/`试验模型：保留RP_wd机身与12个腿部驱动关节，将四轮改为Go2外观网格和半径2.2cm的球形碰撞脚；按默认站姿将脚底高度与原轮足对齐。`check_urdf`解析通过，17个link/16个joint，脚端高度计算差小于0.001mm；生成轮足/点足静态站姿对比图。记录点足模型总质量减少约1.582kg，以及该URDF尚未接入训练、尚未做Isaac Sim动力学验证。当前SuperMimic训练仍在运行，按单仿真实例约束未另开GUI或仿真。 |
 | 2026-10-31 | SuperMimic-ModelBased-v1 | 将实验分支改名为`codex/supermimic-adaptation`，新增RP_wd模型式训练链路：Isaac Lab真实转移回放、3成员残差世界模型、8步自回归拟合状态/扫描/真实奖励/接触/终止、冻结模型参数的可微想象和TD(λ) Critic/确定性Actor更新；教师再通过DAgger在线蒸馏给1740→16 Odin深度学生，包含ONNX单文件导出与独立回放入口。新增`train_supermimic.sh`并接入单仿真实例守卫。Python`py_compile`、Shell`bash -n`和`git diff --check`通过；当前无训练/测试进程。Isaac Sim 5.1目标软链`/media/rmer/data/IsaacLab/_isaac_sim`指向不存在的`/media/rmer/新加卷/isaac-sim-5.1.0`，因此未运行环境创建、仿真或训练，不报告学习效果。旧PPO教师/学生任务保留作对照，权威说明见`SUPERMIMIC_MODEL_BASED.md`。 |

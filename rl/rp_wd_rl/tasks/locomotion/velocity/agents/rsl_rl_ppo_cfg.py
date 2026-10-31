@@ -64,6 +64,16 @@ class RPWDRoughPPORunnerCfg(RPWDFlatPPORunnerCfg):
 
 
 @configclass
+class RPWDPointfootPPORunnerCfg(RPWDFlatPPORunnerCfg):
+    """Go2 点足版从零训练；稀疏保存以控制长课程的磁盘占用。"""
+
+    max_iterations = 20000
+    save_interval = 250
+    experiment_name = "rp_wd_pointfoot"
+    obs_groups = {"actor": ["policy"], "critic": ["policy"]}
+
+
+@configclass
 class RPWDOdinDepthPPORunnerCfg(RPWDRoughPPORunnerCfg):
     """Odin1 深度避障 PPO: CNN 编码8帧深度记忆，MLP融合本体观测."""
 

@@ -27,6 +27,11 @@
 ./rl/scripts/train.sh --resume                           # 从最新 checkpoint 续训
 ./rl/scripts/train.sh --resume --load_run 2026-10-11_11-35-05_rolling_v4 --checkpoint model_1500.pt
 
+# ★ 大狗点足版：12主动关节 + 4个固定球脚；从低台阶起步，逐级开放最高16cm台阶
+# 默认2048并行环境、20000轮、无头训练；新模型独立保存在 rp_wd_pointfoot 实验目录
+./rl/scripts/train_pointfoot.sh --num_envs 2048 --max_iterations 20000 \
+  --seed 42 --run_name 大狗点足版
+
 # Odin1 v19：18000轮基础地形教师 → 三种子验收 → 2000轮含噪学生（共20000，headless）
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42
 
@@ -74,6 +79,7 @@
 - 深度原图默认逆时针旋转90°，adapter由22帧历史间隔3帧抽8张（约1.4秒）；旧1740维模型回放用`--depth-memory-stride 1`、ROS用`memory_stride:=1`。实物方向相反时启动adapter时设 `rotation_deg:=270`
 - 高度奖励与低高度终止改用机身正下方地面射线，按实际地面评估站姿净空
 - `--max_iterations` 表示总目标轮数；`--resume` 恢复模型、优化器、迭代和表现门槛状态；`--warm_start_checkpoint` 只迁移 actor/critic 权重，从新课程第0轮开始并重置优化器/探索噪声
+- 点足版为独立12维动作 / 135维观测策略，不兼容轮足版16维动作模型；训练配置与课程见 `rp_wd_pointfoot_env_cfg.py`
 
 ```bash
 tail -f rl/logs/train_rolling_*.log                      # 实时看迭代/回报
