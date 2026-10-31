@@ -137,6 +137,43 @@ class RPWDOdinTeacherRunnerCfg(RPWDOdinDepthPPORunnerCfg):
 
 
 @configclass
+class RPWDOdinSuperMimicTeacherRunnerCfg(RPWDOdinDepthPPORunnerCfg):
+    """特权地形教师PPO；只负责训练教师，不改变普通Odin profile。"""
+
+    max_iterations = 100000
+    experiment_name = "rp_wd_odin_supermimic_teacher"
+    obs_groups = {
+        "actor": ["policy", "supermimic_state", "supermimic_terrain"],
+        "critic": ["policy", "supermimic_state", "supermimic_terrain"],
+    }
+
+
+@configclass
+class RPWDOdinSuperMimicStudentRunnerCfg(RslRlDistillationRunnerCfg):
+    """把仿真特权教师动作蒸馏给只看Odin深度的部署学生。"""
+
+    num_steps_per_env = 24
+    max_iterations = 5000
+    save_interval = 50
+    experiment_name = "rp_wd_odin_supermimic_student"
+    clip_actions = 10.0
+    student = RPWDOdinDepthPPORunnerCfg().actor
+    teacher = RPWDOdinDepthPPORunnerCfg().actor
+    teacher_checkpoint_loader = "privileged_terrain"
+    obs_groups = {
+        "student": ["policy", "depth_memory"],
+        "teacher": ["policy", "supermimic_state", "supermimic_terrain"],
+    }
+    algorithm = RslRlDistillationAlgorithmCfg(
+        num_learning_epochs=3,
+        gradient_length=24,
+        learning_rate=3.0e-4,
+        max_grad_norm=1.0,
+        loss_type="huber",
+    )
+
+
+@configclass
 class RPWDOdinStudentRunnerCfg(RslRlDistillationRunnerCfg):
     """学生轨迹上的在线动作模仿；从教师权重初始化，降低冷启动摔倒。"""
 

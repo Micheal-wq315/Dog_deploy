@@ -14,7 +14,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors import TiledCameraCfg
+from isaaclab.sensors import RayCasterCfg, TiledCameraCfg, patterns
 from isaaclab.terrains import SubTerrainBaseCfg, TerrainGeneratorCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
@@ -88,6 +88,7 @@ class OdinBenchmarkTerrainCfg(SubTerrainBaseCfg):
 
 
 RPWD_ODIN_DEPTH_TERRAINS_CFG = ODIN_BASIC_TERRAINS_CFG
+SUPERMIMIC_TERRAIN_GRID_SIZE = (16, 12)
 
 
 @configclass
@@ -116,6 +117,32 @@ class RPWDOdinDepthSceneCfg(RPWDRoughSceneCfg):
         update_period=1.0 / 15.0,
         depth_clipping_behavior="max",
     )
+
+
+@configclass
+class RPWDOdinSuperMimicSceneCfg(RPWDOdinDepthSceneCfg):
+    """教师真值高度扫描 + 学生 Odin 相机的共享地形场景。"""
+
+    supermimic_terrain_scanner = RayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base_link",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.35, 0.0, 2.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(
+            resolution=0.1,
+            size=(1.5, 1.1),
+            ordering="yx",  # reshape 为前向×横向的 16×12 网格。
+        ),
+        update_period=0.02,
+        mesh_prim_paths=["/World/ground"],
+        debug_vis=False,
+    )
+
+
+@configclass
+class RPWDOdinSuperMimicTeacherSceneCfg(RPWDOdinSuperMimicSceneCfg):
+    """教师只运行物理特权扫描，不启动无用的TiledCamera渲染。"""
+
+    odin_depth_camera: TiledCameraCfg | None = None
 
 
 @configclass
@@ -186,6 +213,59 @@ class RPWDOdinDepthObservationsCfg(ObservationsCfg):
     policy: ObsGroup = PolicyCfg()
     depth_memory: ObsGroup = DepthMemoryCfg()
     depth_teacher: ObsGroup = TeacherDepthCfg()
+
+
+@configclass
+class RPWDOdinSuperMimicObservationsCfg(RPWDOdinDepthObservationsCfg):
+    """学生深度记忆与教师仿真特权真值并存于同一训练环境。"""
+
+    @configclass
+    class PrivilegedTerrainCfg(ObsGroup):
+        height_scan = ObsTerm(
+            func=mdp.supermimic_terrain_scan,
+            params={
+                "sensor_cfg": SceneEntityCfg("supermimic_terrain_scanner"),
+                "grid_size": SUPERMIMIC_TERRAIN_GRID_SIZE,
+                "height_clip": 0.5,
+            },
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.history_length = 0
+            self.flatten_history_dim = False
+            self.concatenate_terms = True
+
+    @configclass
+    class PrivilegedStateCfg(ObsGroup):
+        dynamics_and_contact = ObsTerm(
+            func=mdp.supermimic_privileged_state,
+            params={
+                "sensor_cfg": SceneEntityCfg(
+                    "contact_forces",
+                    body_names=["LB_FOOT_LINK", "LF_FOOT_LINK", "RB_FOOT_LINK", "RF_FOOT_LINK"],
+                ),
+                "force_limit": 500.0,
+            },
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.history_length = 0
+            self.flatten_history_dim = False
+            self.concatenate_terms = True
+
+    # 蒸馏教师使用仿真扫描；无需额外计算干净深度记忆。
+    depth_teacher: ObsGroup | None = None
+    supermimic_terrain: ObsGroup = PrivilegedTerrainCfg()
+    supermimic_state: ObsGroup = PrivilegedStateCfg()
+
+
+@configclass
+class RPWDOdinSuperMimicTeacherObservationsCfg(RPWDOdinSuperMimicObservationsCfg):
+    """PPO教师不创建相机、不计算学生深度历史。"""
+
+    depth_memory: ObsGroup | None = None
 
 
 @configclass
@@ -292,6 +372,37 @@ class RPWDOdinDepthEnvCfg(RPWDRoughEnvCfg):
 
 
 @configclass
+class RPWDOdinSuperMimicTeacherEnvCfg(RPWDOdinDepthEnvCfg):
+    """特权PPO教师：16×12真值地形扫描与11维真实动力学/接触状态。"""
+
+    scene: RPWDOdinSuperMimicTeacherSceneCfg = RPWDOdinSuperMimicTeacherSceneCfg(
+        num_envs=256, env_spacing=2.5
+    )
+    observations: RPWDOdinSuperMimicTeacherObservationsCfg = RPWDOdinSuperMimicTeacherObservationsCfg()
+
+
+@configclass
+class RPWDOdinSuperMimicTeacherEnvCfg_PLAY(RPWDOdinSuperMimicTeacherEnvCfg):
+    """特权教师评测场景。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        from isaaclab.envs.mdp.commands import UniformVelocityCommandCfg
+
+        self.scene.num_envs = 8
+        self.commands.base_velocity = UniformVelocityCommandCfg(
+            asset_name="robot", resampling_time_range=(8.0, 12.0),
+            rel_standing_envs=0.0, heading_command=False, debug_vis=False,
+            ranges=copy.deepcopy(self.commands.base_velocity.ranges),
+        )
+        self.rewards.track_lin_vel_xy_exp.func = mdp.track_lin_vel_xy_exp
+        self.rewards.track_lin_vel_xy_exp.params = {"command_name": "base_velocity", "std": 0.35}
+        self.rewards.track_ang_vel_z_exp.func = mdp.track_ang_vel_z_exp
+        self.rewards.track_ang_vel_z_exp.params = {"command_name": "base_velocity", "std": 0.5}
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
 class RPWDOdinDepthEnvCfg_TEACHER(RPWDOdinDepthEnvCfg):
     """十万轮基础地形 PPO 教师，按通过质量渐进解锁地形。"""
 
@@ -317,6 +428,16 @@ class RPWDOdinDepthEnvCfg_STUDENT(RPWDOdinDepthEnvCfg):
         self.observations.depth_memory.depth_memory.params.update(
             augmentation_warmup_steps=0, augmentation_ramp_steps=24_000,
         )
+
+
+@configclass
+class RPWDOdinSuperMimicStudentEnvCfg(RPWDOdinDepthEnvCfg_STUDENT):
+    """特权教师在线蒸馏环境：学生仅使用原Odin深度和本体观测。"""
+
+    scene: RPWDOdinSuperMimicSceneCfg = RPWDOdinSuperMimicSceneCfg(
+        num_envs=256, env_spacing=2.5
+    )
+    observations: RPWDOdinSuperMimicObservationsCfg = RPWDOdinSuperMimicObservationsCfg()
 
 
 @configclass

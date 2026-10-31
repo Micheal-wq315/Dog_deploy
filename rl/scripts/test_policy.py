@@ -90,12 +90,20 @@ elif args_cli.num_envs is None:
     args_cli.num_envs = 16
 if args_cli.max_steps is None:
     args_cli.max_steps = 0
-if args_cli.task and "OdinDepth" in args_cli.task:
+if args_cli.task and "OdinDepth" in args_cli.task and "SuperMimic-Teacher" not in args_cli.task:
     args_cli.enable_cameras = True
 if args_cli.save_depth and not args_cli.save_dir:
     parser.error("--save-depth 需要同时指定 --save-dir。")
-if args_cli.save_depth and (not args_cli.task or "OdinDepth" not in args_cli.task):
+if args_cli.save_depth and (
+    not args_cli.task or "OdinDepth" not in args_cli.task or "SuperMimic-Teacher" in args_cli.task
+):
     parser.error("--save-depth 仅适用于 OdinDepth 任务，请显式指定 --task Isaac-Velocity-Rough-RPWD-OdinDepth-Play-v0。")
+if args_cli.depth_memory_stride is not None and (
+    not args_cli.task or "OdinDepth" not in args_cli.task or "SuperMimic-Teacher" in args_cli.task
+):
+    parser.error("--depth-memory-stride 只适用于包含 Odin 深度历史的任务。")
+if args_cli.export and args_cli.task and "SuperMimic-Teacher" in args_cli.task:
+    parser.error("特权教师输入不符合部署契约；请评测/导出蒸馏后的深度学生。")
 if args_cli.num_envs < 1 or args_cli.measure_steps < 1 or args_cli.settle_steps < 0:
     parser.error("环境数和测量步数必须大于0，稳定步数不能小于0。")
 if args_cli.real_time is None:

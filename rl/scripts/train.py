@@ -44,7 +44,7 @@ parser.add_argument("--log_project_name", type=str, default=None, help="wandb/ne
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-if args_cli.video or "OdinDepth" in args_cli.task:
+if args_cli.video or ("OdinDepth" in args_cli.task and "SuperMimic-Teacher" not in args_cli.task):
     args_cli.enable_cameras = True
 
 # 训练一律无头运行: 强制关掉 Isaac Sim 图形窗口.
@@ -69,7 +69,11 @@ from datetime import datetime  # noqa: E402
 import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
 from rsl_rl.runners import OnPolicyRunner, DistillationRunner  # noqa: E402
-from policy_checkpoint import initialize_student, warm_start_policy  # noqa: E402
+from policy_checkpoint import (  # noqa: E402
+    initialize_student,
+    initialize_supermimic_student,
+    warm_start_policy,
+)
 
 from isaaclab.envs import ManagerBasedRLEnvCfg  # noqa: E402
 from isaaclab.utils.dict import print_dict  # noqa: E402
@@ -198,7 +202,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     runner.save = save_with_odin_course_state
     if args_cli.teacher_checkpoint:
-        initialize_student(runner, args_cli.teacher_checkpoint)
+        if getattr(agent_cfg, "teacher_checkpoint_loader", None) == "privileged_terrain":
+            initialize_supermimic_student(runner, args_cli.teacher_checkpoint)
+        else:
+            initialize_student(runner, args_cli.teacher_checkpoint)
         print(f"[INFO] 学生与教师权重已初始化: {args_cli.teacher_checkpoint}")
     if args_cli.warm_start_checkpoint:
         warm_start_policy(runner, args_cli.warm_start_checkpoint)
