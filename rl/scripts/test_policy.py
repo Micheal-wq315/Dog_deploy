@@ -260,8 +260,15 @@ def read_metrics(env) -> dict:
     w_b = robot.data.root_ang_vel_b
     err_lin = torch.linalg.norm(cmd[:, :2] - v_b[:, :2], dim=1)
     err_yaw = (cmd[:, 2] - w_b[:, 2]).abs()
-    wheel_lin = robot.data.joint_vel[:, WHEEL_JOINT_INDICES].abs().mean(dim=1) * WHEEL_RADIUS
     speed = torch.linalg.norm(v_b[:, :2], dim=1)
+    has_wheels = max(WHEEL_JOINT_INDICES) < robot.data.joint_vel.shape[1]
+    if has_wheels:
+        wheel_lin = robot.data.joint_vel[:, WHEEL_JOINT_INDICES].abs().mean(dim=1) * WHEEL_RADIUS
+        slip = (wheel_lin.mean() / torch.clamp(speed.mean(), min=1e-3)).item()
+    else:
+        # 点足版只有12个主动腿关节；没有轮关节时不计算轮速/滑移比。
+        wheel_lin = torch.zeros_like(speed)
+        slip = 0.0
     return {
         "cmd": cmd.mean(dim=0),
         "v": v_b.mean(dim=0),
@@ -273,18 +280,23 @@ def read_metrics(env) -> dict:
         "height": robot.data.root_pos_w[:, 2].mean(),
         "speed": speed.mean(),
         "wheel_lin": wheel_lin.mean(),
-        "slip": (wheel_lin.mean() / torch.clamp(speed.mean(), min=1e-3)).item(),
+        "slip": slip,
+        "has_wheels": has_wheels,
     }
 
 
 def format_line(step: int, m: dict, rew: float) -> str:
     c, v = m["cmd"], m["v"]
+    locomotion_info = (
+        f"| 轮线速{m['wheel_lin']:.2f} 滑移比{m['slip']:.2f}"
+        if m["has_wheels"] else "| 点足"
+    )
     return (
         f"[{step * POLICY_DT:6.1f}s] 指令({c[0]:+.2f},{c[1]:+.2f},{c[2]:+.2f}) "
         f"实际({v[0]:+.2f},{v[1]:+.2f},{m['wz']:+.2f}) "
         f"|误差| 线速{m['err_lin']:.3f}(最大{m['err_lin_max']:.3f}) 偏航{m['err_yaw']:.3f} "
         f"| 姿态{m['tilt_deg']:.1f}° 高{m['height']:.3f}m "
-        f"| 轮线速{m['wheel_lin']:.2f} 滑移比{m['slip']:.2f} | 回报{rew:+.4f}/步"
+        f"{locomotion_info} | 回报{rew:+.4f}/步"
     )
 
 
