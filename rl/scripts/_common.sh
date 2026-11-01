@@ -34,7 +34,8 @@ ensure_isaac_sim_idle() {
 from pathlib import Path
 active = []
 scripts = {"train.py", "train_supermimic.py", "test_policy.py", "play.py",
-           "play_supermimic.py", "verify_contract.py"}
+           "play_supermimic.py", "verify_contract.py",
+           "train_pointfoot_supermimic.py", "play_pointfoot_supermimic.py"}
 for directory in Path("/proc").glob("[0-9]*"):
     try:
         argv = directory.joinpath("cmdline").read_bytes().decode(errors="replace").split("\0")

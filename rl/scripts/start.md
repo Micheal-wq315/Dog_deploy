@@ -55,6 +55,19 @@
   --num_envs 8
 # 设计、网络维度、保存路径与边界说明：rl/SUPERMIMIC_MODEL_BASED.md
 
+# ★ 点足版 Go2W SuperMimic：独立分支 codex/pointfoot-supermimic-wm
+# 单世界模型教师 + 特权地形高度图 + 可微想象更新；Actor盲走，12维点足动作。
+# 默认64环境、40000次模型更新，每次采1个仿真步；headless并自动检查并发/阻止休眠。
+./rl/scripts/train_pointfoot_supermimic.sh --num_envs 64 \
+  --iterations 40000 --seed 42 --run_name 大狗点足版
+# 从教师checkpoint续训（累计总轮数），课程地形状态会恢复，回放池会重新采样。
+./rl/scripts/train_pointfoot_supermimic.sh --num_envs 64 \
+  --iterations 40000 --seed 42 --resume /path/to/teacher_latest.pt
+# GUI查看最新点足模型；关闭GUI前先停止其它Isaac Sim训练/测试。
+./rl/scripts/play_pointfoot_supermimic.sh \
+  --checkpoint /path/to/teacher_latest.pt --num_envs 1
+# 详细算法、楼梯奖励和限制：rl/SUPERMIMIC_POINTFOOT.md
+
 # 从已保存教师checkpoint接续两万轮流程；阶段性能未达标仅记录，最终资格门槛仍保留
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42 \
   --resume-teacher-checkpoint /home/rmer/Dog_deploy-main/Dog_deploy-main/rl/logs/rsl_rl/rp_wd_odin_teacher/2026-10-29_22-50-43_odin_basic_v19_20261029_225031_teacher2000/model_1999.pt \
@@ -279,6 +292,8 @@ ls -t rl/logs/rsl_rl/*/*/model_*.pt | head -1
 > 所以大侧向速度物理上很难跟准，是**预期行为**，不是策略坏了。
 
 ---
+
+点足版 SuperMimic 是独立的 135→12 盲策略训练器；目前仅可用配套 GUI 回放，尚未接入 ROS 点足部署节点或 ONNX 契约。
 
 ## 7. 相关文档
 
