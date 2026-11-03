@@ -203,7 +203,7 @@ def pointfoot_terrain_curriculum(
     env_ids,
     performance_window: int = 64,
     pass_threshold: float = 0.60,
-    minimum_steps: tuple[int, ...] = (0, 3000, 8000, 15000, 22000, 30000),
+    minimum_steps: tuple[int, ...] = (0, 1500, 4000, 8000, 12000, 16000),
 ) -> torch.Tensor:
     """仿 Go2W 的64回合成功率门控；走得远但摔倒不算通过楼梯。"""
     terrain = env.scene.terrain

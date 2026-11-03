@@ -380,7 +380,11 @@ class PointfootSuperMimicLearner:
             next_scan = self.field.scan(next_state, next_pose)
             gravity = F.normalize(next_state[:, 1:4], dim=-1, eps=1e-6)
             survival = torch.sigmoid((-gravity[:, 2:3] - math.cos(math.radians(55))) / .08)
-            continuation = survival * (1.0 - collision)
+            # 腿部擦碰在真实环境中仅受惩罚，不应当作死亡。
+            # 学习的终止头监督真实terminated，几何代理显式覆盖倾角与低净空保护。
+            height_survival = torch.sigmoid((next_state[:, :1] - 0.17) / 0.01)
+            terminal = pred["terminated_logit"].sigmoid()
+            continuation = survival * height_survival * (1.0 - terminal)
             reward = (0.02 * self.task_rewards.reward(
                 next_state, action, previous, command, next_scan, collision, 1.0 - continuation
             ))[:, None]
