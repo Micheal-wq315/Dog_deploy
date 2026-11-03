@@ -9,6 +9,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import sys
+import traceback
 import time
 
 from isaaclab.app import AppLauncher
@@ -18,7 +19,8 @@ sys.stdout.reconfigure(line_buffering=True)
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task", default="Isaac-Velocity-Rough-RPWD-Pointfoot-SuperMimic-WM-v0")
 parser.add_argument("--num_envs", type=int, default=64)
-parser.add_argument("--iterations", type=int, default=40000)
+parser.add_argument("--iterations", type=int, default=20000)
+parser.add_argument("--episode_length_s", type=float, default=35.0)
 parser.add_argument("--steps_per_iteration", type=int, default=1,
                     help="Go2W源码每次更新采集1个仿真步；保持此值可对齐其更新节奏")
 parser.add_argument("--seed", type=int, default=42)
@@ -44,7 +46,7 @@ parser.add_argument("--lr_final_frac", type=float, default=0.2)
 parser.add_argument("--action_noise", type=float, default=0.15)
 parser.add_argument("--critic_epochs", type=int, default=5)
 parser.add_argument("--critic_minibatches", type=int, default=4)
-parser.add_argument("--save_interval", type=int, default=1000)
+parser.add_argument("--save_interval", type=int, default=500)
 parser.add_argument("--log_interval", type=int, default=50)
 parser.add_argument("--wm_hidden", type=int, nargs="+", default=(512, 512, 512))
 parser.add_argument("--actor_hidden", type=int, nargs="+", default=(256, 128, 64))
@@ -79,6 +81,7 @@ from rp_wd_rl.supermimic.pointfoot import (  # noqa: E402
     POLICY_DIM,
     PointfootSuperMimicLearner,
 )
+from rp_wd_rl.supermimic.pointfoot_terrain import PointfootTerrainField, PointfootTaskRewards
 from sim_shutdown import shutdown  # noqa: E402
 
 
@@ -109,7 +112,9 @@ class PointfootStateAdapter:
         self.robot = self.env.scene["robot"]
         action_term = self.env.action_manager.get_term("joint_pos")
         self.leg_ids = torch.as_tensor(
-            action_term._joint_ids, device=self.env.device, dtype=torch.long
+            list(range(self.robot.num_joints))[action_term._joint_ids]
+            if isinstance(action_term._joint_ids, slice) else action_term._joint_ids,
+            device=self.env.device, dtype=torch.long
         )
         if len(self.leg_ids) != ACTION_DIM or self.env.action_manager.total_action_dim != ACTION_DIM:
             raise RuntimeError("点足 SuperMimic 要求12个主动关节、12维策略动作")
@@ -124,11 +129,35 @@ class PointfootStateAdapter:
         )
         if len(self.foot_body_ids) != 4 or len(self.foot_sensor_ids) != 4:
             raise RuntimeError("ContactSensor 未解析到四个点脚刚体")
+        names = [self.robot.joint_names[i] for i in self.leg_ids.cpu().tolist()]
+        self.task_rewards = PointfootTaskRewards(
+            names, self.robot.data.default_joint_pos[0, self.leg_ids],
+            self.robot.data.soft_joint_pos_limits[0, self.leg_ids])
+        self.field = PointfootTerrainField.from_env(self.env)
+        self.env._pointfoot_field = self.field
+        self.env._pointfoot_task_rewards = self.task_rewards
+        materials = self.robot.root_physx_view.get_material_properties().to(self.env.device)
+        # 此URDF四个脚端各只有一个球形shape；刚体顺序不等于shape顺序。
+        shape_ids, offset = {}, 0
+        for body, link_path in zip(self.robot.body_names, self.robot.root_physx_view.link_paths[0]):
+            body_view = self.robot._physics_sim_view.create_rigid_body_view(link_path)
+            shape_ids[body] = offset
+            offset += body_view.max_shapes
+        if offset != materials.shape[1]:
+            raise RuntimeError(f"碰撞shape映射失败：USD={offset}, PhysX={materials.shape[1]}")
+        friction = materials[:, [shape_ids[name] for name in foot_names], 1]
+        base_id = self.robot.find_bodies("base_link")[0][0]
+        com = self.robot.root_physx_view.get_coms().to(self.env.device)[:, base_id, :3]
+        reference_com = com.new_tensor((-0.0064993, -0.0009295, 0.0021204))
+        self.context = torch.cat((friction, com - reference_com), -1)
+        print(f"[信息] 本地包={Path(__import__('rp_wd_rl').__file__).resolve()} "
+              f"盲策略={POLICY_DIM}→12 地形缓存={self.field.h.numel()*4/2**20:.1f}MiB", flush=True)
+
 
     def capture(self, observations: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         env, robot = self.env, self.robot
         data = robot.data
-        ground_z = env.scene.sensors["height_scanner"].data.ray_hits_w[:, 0, 2]
+        ground_z = self.field.sample(data.root_pos_w[:, :2])
         ground_z = torch.where(torch.isfinite(ground_z), ground_z, env.scene.env_origins[:, 2])
         clearance = data.root_pos_w[:, 2] - ground_z
         joint_pos = data.joint_pos[:, self.leg_ids] - data.default_joint_pos[:, self.leg_ids]
@@ -146,7 +175,7 @@ class PointfootStateAdapter:
                           1.0 - 2.0 * (qy.square() + qz.square()))
         pose = torch.cat((data.root_pos_w[:, :2], yaw[:, None]), dim=-1)
         command = env.command_manager.get_command("base_velocity")
-        scan = observations["supermimic_terrain"].reshape(env.num_envs, -1)
+        scan = self.field.scan(state, pose)
         if scan.shape[-1] != 273:
             raise RuntimeError(f"地形高度图应为273维，实际为{scan.shape[-1]}")
 
@@ -169,12 +198,16 @@ class PointfootStateAdapter:
             "contacts": contacts,
             "collision": collision,
             "history": policy_history,
+            "context": self.context,
+            "bias": torch.cat((getattr(env, "_rp_wd_gyro_bias"),
+                               getattr(env, "_rp_wd_joint_offset")[:, self.leg_ids]), -1),
         }
 
 
 def _make_env():
     cfg = parse_env_cfg(args.task, device=args.device or "cuda:0", num_envs=args.num_envs)
     cfg.seed = args.seed
+    cfg.episode_length_s = args.episode_length_s
     env = gym.make(args.task, cfg=cfg, render_mode=None)
     print(f"[信息] 任务={args.task} 环境数={env.unwrapped.num_envs} headless=True", flush=True)
     return env
@@ -209,14 +242,14 @@ def _ensure_course_state(env) -> None:
         return
     terrain = env.scene.terrain
     env._pointfoot_course_caps = torch.zeros(
-        terrain.terrain_generator.num_cols, dtype=torch.long, device=env.device
+        terrain.cfg.terrain_generator.num_cols, dtype=torch.long, device=env.device
     )
     env._pointfoot_course_trials = torch.zeros(
-        terrain.terrain_generator.num_cols, terrain.terrain_generator.num_rows, 64,
+        terrain.cfg.terrain_generator.num_cols, terrain.cfg.terrain_generator.num_rows, 64,
         device=env.device,
     )
     env._pointfoot_course_counts = torch.zeros(
-        terrain.terrain_generator.num_cols, terrain.terrain_generator.num_rows,
+        terrain.cfg.terrain_generator.num_cols, terrain.cfg.terrain_generator.num_rows,
         dtype=torch.long, device=env.device,
     )
 
@@ -228,10 +261,11 @@ def _main() -> None:
     torch.backends.cudnn.allow_tf32 = True
     env = _make_env()
     run_dir = _new_run_dir()
-    learner = PointfootSuperMimicLearner(
-        args, torch.device(env.unwrapped.device), env.unwrapped.num_envs
-    )
     adapter = PointfootStateAdapter(env)
+    learner = PointfootSuperMimicLearner(
+        args, torch.device(env.unwrapped.device), env.unwrapped.num_envs,
+        adapter.field, adapter.task_rewards
+    )
     start_iteration = 0
     resume_payload = None
     if args.resume:
@@ -267,6 +301,12 @@ def _main() -> None:
         episode_return = torch.zeros(env.unwrapped.num_envs, device=env.unwrapped.device)
         recent_returns: deque[float] = deque(maxlen=100)
         model_metrics: dict[str, float] = {}
+        interval_reward = torch.zeros((), device=env.unwrapped.device)
+        interval_error = torch.zeros(3, device=env.unwrapped.device)
+        interval_velocity = torch.zeros(3, device=env.unwrapped.device)
+        interval_command = torch.zeros(3, device=env.unwrapped.device)
+        interval_terms = torch.zeros(len(env.unwrapped.reward_manager.active_terms), device=env.unwrapped.device)
+        interval_valid = interval_steps = interval_falls = 0
         began = time.monotonic()
         replay_mib = sum(t.numel() * t.element_size() for t in learner.replay.data.values()) / 2**20
         print(f"[信息] 回放容量={args.buffer_len}步，显存约{replay_mib:.1f}MiB", flush=True)
@@ -283,6 +323,11 @@ def _main() -> None:
                             torch.randn_like(ou_noise), alpha=args.action_noise * (1.0 - rho**2) ** 0.5
                         )
                         action = (action_mean + ou_noise).clamp(-1.0, 1.0)
+                        current = {key: value.clone() for key, value in current.items()}
+                        critic_real = torch.cat((current["state"], current["command"], current["context"],
+                                                 previous, current["scan"]), -1)
+                        learner.critic.norm.update(critic_real)
+                        learner.target_critic.norm.load_state_dict(learner.critic.norm.state_dict())
                         next_observations, reward, terminated, truncated, _ = env.step(action)
                         following = adapter.capture(next_observations)
                         terminated = terminated.reshape(-1).bool()
@@ -291,6 +336,8 @@ def _main() -> None:
                         valid = ~done
                         transition = {
                             "state": current["state"],
+                            "context": current["context"], "bias": current["bias"],
+                            "world_pose": current["pose"],
                             "action": action,
                             "previous": previous,
                             "command": current["command"],
@@ -304,12 +351,13 @@ def _main() -> None:
                             "next_force": following["force"],
                             "next_contacts": following["contacts"],
                             "reward": reward[:, None],
-                            "collision": following["collision"],
+                            "collision": env.unwrapped._pointfoot_transition_collision,
                         }
                         event = (done | (following["collision"].squeeze(-1) > 0)
                                  | ((following["contacts"] - current["contacts"]).abs().sum(-1) > 0)
                                  | (following["force"].amax(-1) > 0.35))
-                        learner.replay.add(transition, done, valid, event)
+                        learner.model.update_stats(transition, valid)
+                        learner.replay.add(transition, terminated, valid, event)
                         episode_return += reward
                         if done.any():
                             recent_returns.extend(episode_return[done].cpu().tolist())
@@ -317,10 +365,17 @@ def _main() -> None:
                             previous[done] = 0.0
                             ou_noise[done] = 0.0
                         previous[~done] = action[~done]
-                        velocity_errors.append(
-                            (following["state"][:, 4:6] - following["command"][:, :2])
-                            .norm(dim=-1).mean()
-                        )
+                        measured = torch.cat((following["state"][:, 4:6], following["state"][:, 9:10]), -1)
+                        velocity_errors.append((measured[valid, :2] - current["command"][valid, :2]).norm(dim=-1).mean()
+                                               if valid.any() else measured.new_zeros(()))
+                        interval_error += (measured[valid] - current["command"][valid]).abs().sum(0)
+                        interval_velocity += measured[valid].sum(0)
+                        interval_command += current["command"][valid].sum(0)
+                        interval_valid += int(valid.sum())
+                        interval_falls += int(terminated.sum())
+                        interval_reward += reward.mean()
+                        interval_terms += env.unwrapped.reward_manager._step_reward.detach().mean(0)
+                        interval_steps += 1
                         current = following
                         observations = next_observations
                         rewards.append(reward)
@@ -339,9 +394,14 @@ def _main() -> None:
                     terrain = env.unwrapped.scene.terrain
                     row = {
                         "iteration": iteration + 1,
+                        "actor_lr": learner.actor_optimizer.param_groups[0]["lr"],
                         "simulation_steps": simulation_steps,
                         "real_transitions": simulation_steps * env.unwrapped.num_envs,
-                        "reward_mean": float(torch.stack(rewards).mean().detach()),
+                        "reward_mean": float(interval_reward / max(interval_steps, 1)),
+                        "velocity_mae": (interval_error / max(interval_valid, 1)).tolist(),
+                        "actual_velocity_mean": (interval_velocity / max(interval_valid, 1)).tolist(),
+                        "command_mean": (interval_command / max(interval_valid, 1)).tolist(),
+                        "falls": interval_falls, "interval_steps": interval_steps,
                         "episode_return_mean": (
                             sum(recent_returns) / len(recent_returns) if recent_returns else None
                         ),
@@ -354,15 +414,20 @@ def _main() -> None:
                         **model_metrics,
                         **policy_metrics,
                     }
-                    term_means = torch.stack(reward_term_values).mean(dim=0)
+                    term_means = interval_terms / max(interval_steps, 1)
                     row["reward_terms_per_second"] = {
                         name: float(term_means[index].detach())
                         for index, name in enumerate(env.unwrapped.reward_manager.active_terms)
                     }
                     if hasattr(env.unwrapped, "_pointfoot_course_caps"):
                         row["terrain_level_caps"] = env.unwrapped._pointfoot_course_caps.tolist()
+                    row["course_trials_by_type_level"] = env.unwrapped._pointfoot_course_counts.tolist()
+                    row["course_recent_success_by_type_level"] = env.unwrapped._pointfoot_course_trials.mean(-1).tolist()
                     log.write(json.dumps(row, ensure_ascii=False) + "\n")
                     print("[训练] " + json.dumps(row, ensure_ascii=False), flush=True)
+                    interval_reward.zero_(); interval_error.zero_(); interval_terms.zero_()
+                    interval_velocity.zero_(); interval_command.zero_()
+                    interval_valid = interval_steps = interval_falls = 0
 
                 if (iteration + 1) % args.save_interval == 0 or iteration + 1 == args.iterations:
                     payload = learner.state_dict(iteration + 1)
@@ -402,5 +467,8 @@ def _main() -> None:
 if __name__ == "__main__":
     try:
         _main()
-    finally:
+    except BaseException:
+        traceback.print_exc()
+        shutdown(simulation_app, exit_code=1)
+    else:
         shutdown(simulation_app)

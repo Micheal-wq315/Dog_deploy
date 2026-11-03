@@ -11,12 +11,15 @@ from isaaclab.managers import (
     EventTermCfg as EventTerm,
     ObservationGroupCfg as ObsGroup,
     ObservationTermCfg as ObsTerm,
-    RewTerm,
+    RewardTermCfg as RewTerm,
+    TerminationTermCfg as DoneTerm,
     SceneEntityCfg,
 )
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.utils import configclass
+from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+from rp_wd_rl.supermimic.pointfoot_terrain import REWARD_WEIGHTS
 
 from rp_wd_rl.assets.rp_wd_contract import DECIMATION, SIM_DT
 from rp_wd_rl.tasks.locomotion.velocity import mdp
@@ -76,9 +79,9 @@ class PointfootSuperMimicSceneCfg(PointfootSceneCfg):
     )
     supermimic_terrain_scanner = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base_link",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.65, 0.0, 1.2)),
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 1.2)),
         ray_alignment="yaw",
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=SUPERMIMIC_SCAN_SIZE),
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=SUPERMIMIC_SCAN_SIZE, ordering="yx"),
         update_period=0.02,
         mesh_prim_paths=["/World/ground"],
         debug_vis=False,
@@ -87,18 +90,22 @@ class PointfootSuperMimicSceneCfg(PointfootSceneCfg):
 
 @configclass
 class PointfootSuperMimicObservationsCfg(PointfootObservationsCfg):
-    """Actor 仍只有135维本体历史；前视地形图单独暴露给训练循环。"""
+    """Actor 仅使用225维五帧本体历史；前视地形图单独暴露给训练循环。"""
+
+    @configclass
+    class BlindPolicyCfg(PointfootObservationsCfg.PolicyCfg):
+        def __post_init__(self):
+            super().__post_init__()
+            self.history_length = 5
+            self.base_ang_vel.noise = Unoise(n_min=-0.2, n_max=0.2)
+            self.projected_gravity.noise = Unoise(n_min=-0.05, n_max=0.05)
+            self.joint_vel.scale = 0.05
+
+    policy: BlindPolicyCfg = BlindPolicyCfg()
 
     @configclass
     class PrivilegedTerrainCfg(ObsGroup):
-        terrain_scan = ObsTerm(
-            func=mdp.supermimic_terrain_scan,
-            params={
-                "sensor_cfg": SceneEntityCfg("supermimic_terrain_scanner"),
-                "grid_size": SUPERMIMIC_SCAN_GRID,
-                "height_clip": 0.5,
-            },
-        )
+        terrain_scan = ObsTerm(func=mdp.pointfoot_supermimic_scan)
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -113,7 +120,7 @@ class PointfootSuperMimicCommandsCfg:
 
     base_velocity = mdp.UniformVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(20.0, 20.0),
+        resampling_time_range=(35.0, 35.0),
         rel_standing_envs=0.0,
         heading_command=False,
         rel_heading_envs=0.0,
@@ -134,14 +141,17 @@ class PointfootSuperMimicActionsCfg(PointfootActionsCfg):
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[".*_ABAD_JOINT", ".*_HIP_JOINT", ".*_KENN_JOINT"],
-        scale={".*_ABAD_JOINT": 0.125, ".*_HIP_JOINT": 0.6, ".*_KENN_JOINT": 0.8},
+        scale={".*_ABAD_JOINT": 0.25, ".*_HIP_JOINT": 0.6, ".*_KENN_JOINT": 0.8},
         use_default_offset=True,
     )
 
 
 @configclass
 class PointfootSuperMimicEventsCfg(PointfootEventsCfg):
-    """上阶赛道朝向固定，保留其它物理与传感器随机化。"""
+    """摩擦/COM进入模型context；固定质量、增益与关节参数，避免未观测动力学混杂。"""
+    add_base_mass = None
+    actuator_gains = None
+    joint_parameters = None
 
     reset_base = EventTerm(
         func=mdp.reset_root_state_uniform,
@@ -161,23 +171,23 @@ class PointfootSuperMimicEventsCfg(PointfootEventsCfg):
 
 
 @configclass
-class PointfootSuperMimicRewardsCfg(PointfootRewardsCfg):
-    """放松平地垂向约束，加入上阶抬脚、干净着陆和楼梯前进信号。"""
+class PointfootSuperMimicRewardsCfg:
+    """按Go2W的解析奖励训练；轮子滚动约束替换为点脚的局部越障净空。"""
 
-    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.25)
-    flat_orientation_l2 = RewTerm(
-        func=mdp.flat_orientation_l2,
-        weight=-0.25,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
-    stair_lift = RewTerm(func=mdp.pointfoot_stair_lift_reward, weight=6.0)
-    stair_landing = RewTerm(func=mdp.pointfoot_stair_landing_reward, weight=10.0)
-    stair_progress = RewTerm(func=mdp.pointfoot_stair_progress_reward, weight=0.5)
+    def __post_init__(self):
+        for name, weight in REWARD_WEIGHTS.items():
+            setattr(self, name, RewTerm(func=mdp.pointfoot_model_reward,
+                                       weight=weight, params={"term": name}))
 
 
 @configclass
 class PointfootSuperMimicCurriculumCfg:
     terrain_levels = CurrTerm(func=mdp.pointfoot_terrain_curriculum)
+
+
+@configclass
+class PointfootSuperMimicTerminationsCfg(PointfootTerminationsCfg):
+    course_exit = DoneTerm(func=mdp.pointfoot_course_exit, time_out=True)
 
 
 @configclass
@@ -191,13 +201,13 @@ class RPWDPointfootSuperMimicEnvCfg(RPWDPointfootEnvCfg):
     actions: PointfootSuperMimicActionsCfg = PointfootSuperMimicActionsCfg()
     commands: PointfootSuperMimicCommandsCfg = PointfootSuperMimicCommandsCfg()
     rewards: PointfootSuperMimicRewardsCfg = PointfootSuperMimicRewardsCfg()
-    terminations: PointfootTerminationsCfg = PointfootTerminationsCfg()
+    terminations: PointfootSuperMimicTerminationsCfg = PointfootSuperMimicTerminationsCfg()
     events: PointfootSuperMimicEventsCfg = PointfootSuperMimicEventsCfg()
     curriculum: PointfootSuperMimicCurriculumCfg = PointfootSuperMimicCurriculumCfg()
 
     def __post_init__(self):
         super().__post_init__()
-        self.episode_length_s = 20.0
+        self.episode_length_s = 35.0
         self.sim.render_interval = DECIMATION
         self.sim.dt = SIM_DT
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15

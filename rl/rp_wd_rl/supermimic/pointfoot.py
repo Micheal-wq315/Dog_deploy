@@ -7,6 +7,8 @@ import math
 
 import torch
 from torch import nn
+
+from .pointfoot_terrain import advance_pose
 import torch.nn.functional as F
 
 
@@ -17,13 +19,14 @@ SCAN_DIM = 21 * 13
 CONTACT_DIM = 4
 FORCE_DIM = 4
 POSE_DIM = 3
-HISTORY = 3
+CONTEXT_DIM = 7
+HISTORY = 5
 FRAME_DIMS = (3, 3, 3, 12, 12, 12)
 POLICY_DIM = sum(FRAME_DIMS) * HISTORY
-MODEL_INPUT_DIM = STATE_DIM + 2 * ACTION_DIM + COMMAND_DIM + SCAN_DIM
-MODEL_CONT_DIM = STATE_DIM + POSE_DIM + SCAN_DIM + FORCE_DIM + 1
+MODEL_INPUT_DIM = STATE_DIM + 2 * ACTION_DIM + CONTEXT_DIM + SCAN_DIM
+MODEL_CONT_DIM = STATE_DIM + POSE_DIM + FORCE_DIM
 MODEL_AUX_DIM = CONTACT_DIM + 2  # 四脚接触、非脚碰撞、回合终止
-FORMAT = "rp-wd-pointfoot-supermimic-v1"
+FORMAT = "rp-wd-pointfoot-supermimic-v2"
 
 
 class RunningNorm(nn.Module):
@@ -61,7 +64,7 @@ class RunningNorm(nn.Module):
 
 
 class PointfootActor(nn.Module):
-    """盲策略，只接收 135 维本体历史并输出归一化12关节位置动作。"""
+    """盲策略，只接收 225 维本体历史并输出归一化12关节位置动作。"""
 
     def __init__(self, hidden: tuple[int, ...] = (256, 128, 64)):
         super().__init__()
@@ -86,7 +89,7 @@ class PointfootCritic(nn.Module):
 
     def __init__(self, hidden: tuple[int, ...] = (256, 128, 64)):
         super().__init__()
-        self.input_dim = STATE_DIM + COMMAND_DIM + ACTION_DIM + SCAN_DIM + CONTACT_DIM + FORCE_DIM
+        self.input_dim = STATE_DIM + COMMAND_DIM + CONTEXT_DIM + ACTION_DIM + SCAN_DIM
         layers: list[nn.Module] = []
         width = self.input_dim
         for size in hidden:
@@ -101,7 +104,7 @@ class PointfootCritic(nn.Module):
 
 
 class PointfootDynamics(nn.Module):
-    """预测残差状态、机身位姿、扫描变化、脚端载荷、奖励和接触/终止事件。"""
+    """预测残差状态、机身位姿、脚端载荷和接触/终止事件。"""
 
     def __init__(self, hidden: tuple[int, ...] = (512, 512, 512)):
         super().__init__()
@@ -119,37 +122,31 @@ class PointfootDynamics(nn.Module):
         nn.init.zeros_(self.continuous_head.bias)
         nn.init.zeros_(self.event_head.weight)
         nn.init.constant_(self.event_head.bias[-1], -4.0)
+        nn.init.constant_(self.event_head.bias[CONTACT_DIM:CONTACT_DIM + 1], -4.6)
 
     @staticmethod
-    def targets(batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        reward = batch["reward"] / 5.0
-        return torch.cat((
-            batch["next_state"] - batch["state"],
-            batch["pose"],
-            batch["next_scan"] - batch["scan"],
-            batch["next_force"],
-            reward,
-        ), dim=-1)
+    def targets(batch):
+        return torch.cat((batch["next_state"] - batch["state"], batch["pose"],
+                          batch["next_force"]), dim=-1)
 
-    def forward(
-        self, state: torch.Tensor, action: torch.Tensor, previous: torch.Tensor,
-        command: torch.Tensor, scan: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        inputs = torch.cat((state, action, previous, command, scan), dim=-1)
+    @torch.no_grad()
+    def update_stats(self, batch, valid):
+        if valid.any():
+            inputs = torch.cat((batch["state"], batch["action"], batch["previous"],
+                                batch["context"], batch["scan"]), -1)
+            self.input_norm.update(inputs[valid])
+            self.output_norm.update(self.targets(batch)[valid])
+
+    def forward(self, state, action, previous, context, scan):
+        inputs = torch.cat((state, action, previous, context, scan), dim=-1)
         latent = self.trunk(self.input_norm(inputs))
         continuous = self.continuous_head(latent) * self.output_norm.scale + self.output_norm.mean
         event = self.event_head(latent)
-        s1 = STATE_DIM
-        p1 = s1 + POSE_DIM
-        h1 = p1 + SCAN_DIM
-        f1 = h1 + FORCE_DIM
         return {
             "continuous": continuous,
-            "state": state + continuous[..., :s1],
-            "pose_delta": continuous[..., s1:p1],
-            "scan": (scan + continuous[..., p1:h1]).clamp(-1.0, 1.0),
-            "force": continuous[..., h1:f1].clamp(0.0, 1.0),
-            "reward_scaled": continuous[..., f1:f1 + 1],
+            "state": state + continuous[..., :STATE_DIM],
+            "pose_delta": continuous[..., STATE_DIM:STATE_DIM + POSE_DIM],
+            "force": continuous[..., -FORCE_DIM:].clamp(0, 1),
             "contact_logit": event[..., :CONTACT_DIM],
             "collision_logit": event[..., CONTACT_DIM:CONTACT_DIM + 1],
             "terminated_logit": event[..., CONTACT_DIM + 1:CONTACT_DIM + 2],
@@ -161,6 +158,7 @@ class PointfootReplay:
 
     SHAPES = {
         "state": STATE_DIM, "action": ACTION_DIM, "previous": ACTION_DIM,
+        "context": CONTEXT_DIM, "world_pose": POSE_DIM, "bias": 15,
         "command": COMMAND_DIM, "scan": SCAN_DIM, "force": FORCE_DIM,
         "contacts": CONTACT_DIM, "history": POLICY_DIM, "pose": POSE_DIM,
         "next_state": STATE_DIM, "next_scan": SCAN_DIM, "next_force": FORCE_DIM,
@@ -236,8 +234,8 @@ class PointfootReplay:
         return {key: value[:, 0] for key, value in result.items()}
 
 
-def _critic_features(state, command, previous, scan, contacts, force):
-    return torch.cat((state, command, previous, scan, contacts, force), dim=-1)
+def _critic_features(state, command, previous, scan, context):
+    return torch.cat((state, command, context, previous, scan), dim=-1)
 
 
 def _push_history(history: torch.Tensor, latest: torch.Tensor) -> torch.Tensor:
@@ -259,18 +257,19 @@ def _imagined_frame(
 ) -> torch.Tensor:
     """与点足策略项顺序一致，并复现训练观测中的传感器噪声幅值。"""
     n = state.shape[0]
-    angular = state[:, 7:10] + gyro_bias + (torch.rand(n, 3, device=state.device) * 0.30 - 0.15)
-    gravity = state[:, 1:4] + (torch.rand(n, 3, device=state.device) * 0.06 - 0.03)
+    angular = state[:, 7:10] + gyro_bias + (torch.rand(n, 3, device=state.device) * 0.40 - 0.20)
+    gravity = state[:, 1:4] + (torch.rand(n, 3, device=state.device) * 0.10 - 0.05)
     joint_pos = state[:, 10:22] + joint_bias + (torch.rand(n, 12, device=state.device) * 0.02 - 0.01)
     joint_vel = state[:, 22:34] + (torch.rand(n, 12, device=state.device) * 3.0 - 1.5)
-    return torch.cat((angular, gravity, command, joint_pos, joint_vel, action), dim=-1)
+    return torch.cat((angular, gravity, command, joint_pos, joint_vel * 0.05, action), dim=-1)
 
 
 class PointfootSuperMimicLearner:
     """Go2W式更新：真实环境采样、模型拟合、想象回报 Actor 梯度和 TD(lambda) Critic。"""
 
-    def __init__(self, args, device: torch.device, num_envs: int):
+    def __init__(self, args, device: torch.device, num_envs: int, field, task_rewards):
         self.args, self.device = args, device
+        self.field, self.task_rewards = field, task_rewards
         self.model = PointfootDynamics(tuple(args.wm_hidden)).to(device)
         self.actor = PointfootActor(tuple(args.actor_hidden)).to(device)
         self.critic = PointfootCritic(tuple(args.critic_hidden)).to(device)
@@ -286,83 +285,61 @@ class PointfootSuperMimicLearner:
     def fit_world_model(self) -> dict[str, float]:
         batch = self.replay.sample_windows(self.args.wm_batch, self.args.wm_window)
         seq = batch["sequence_valid"].squeeze(-1).bool()
-        valid = seq & batch["valid"].squeeze(-1).bool()
-        if not valid.any():
-            return {"wm_loss": 0.0}
-
-        inputs = torch.cat((batch["state"], batch["action"], batch["previous"],
-                            batch["command"], batch["scan"]), dim=-1)
-        targets = PointfootDynamics.targets(batch)
-        self.model.input_norm.update(inputs[valid])
-        self.model.output_norm.update(targets[valid])
-
-        window = batch["action"].shape[1]
-        state = batch["state"][:, 0].clone()
-        scan = batch["scan"][:, 0].clone()
+        valid = batch["valid"].squeeze(-1).bool()
+        state, pose = batch["state"][:, 0], batch["world_pose"][:, 0]
         active = seq[:, 0]
-        accum: dict[str, list[torch.Tensor]] = {
-            key: [] for key in ("state", "pose", "scan", "force", "reward",
-                                "contact", "collision", "terminal")
-        }
-        for t in range(window):
+        accum = {key: [] for key in ("state", "pose", "force", "contact", "collision", "terminal")}
+        scale = self.model.output_norm.scale
+        for t in range(self.args.wm_window):
             active = active & seq[:, t]
-            dynamics = active & valid[:, t]
             if not active.any():
                 break
-            pred = self.model(state, batch["action"][:, t], batch["previous"][:, t],
-                              batch["command"][:, t], scan)
-            scale = self.model.output_norm.scale
-            s0, s1 = 0, STATE_DIM
-            p0, p1 = s1, s1 + POSE_DIM
-            h0, h1 = p1, p1 + SCAN_DIM
-            f0, f1 = h1, h1 + FORCE_DIM
+            # 原版流程：只处理终止之前的行，自动reset状态不进入自回归序列。
+            keep = active.nonzero(as_tuple=True)[0]
+            scan = self.field.scan(state[keep], pose[keep])
+            pred = self.model(state[keep], batch["action"][keep, t], batch["previous"][keep, t],
+                              batch["context"][keep, 0], scan)
+            dynamics = valid[keep, t]
             if dynamics.any():
-                state_error = (pred["state"] - batch["next_state"][:, t]) / scale[s0:s1]
-                pose_error = (pred["pose_delta"] - batch["pose"][:, t]) / scale[p0:p1]
-                scan_error = (pred["scan"] - batch["next_scan"][:, t]) / scale[h0:h1]
-                force_error = (pred["continuous"][..., f0:f1] - batch["next_force"][:, t]) / scale[f0:f1]
-                for key, error in (("state", state_error), ("pose", pose_error),
-                                   ("scan", scan_error), ("force", force_error)):
-                    element = F.smooth_l1_loss(error, torch.zeros_like(error), reduction="none")
-                    accum[key].append(element[dynamics].mean())
-                state = torch.where(dynamics[:, None], pred["state"], state)
-                scan = torch.where(dynamics[:, None], pred["scan"], scan)
-
-            reward_target = batch["reward"][:, t] / 5.0
-            reward_loss = F.smooth_l1_loss(pred["reward_scaled"], reward_target, reduction="none")
-            accum["reward"].append(reward_loss[active].mean())
-            for key, logits, target, mask in (
-                ("contact", pred["contact_logit"], batch["next_contacts"][:, t], dynamics),
-                ("collision", pred["collision_logit"], batch["collision"][:, t], dynamics),
-                ("terminal", pred["terminated_logit"], batch["terminated"][:, t], active),
-            ):
-                if mask.any():
-                    loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-                    accum[key].append(loss[mask].mean())
-            # 终止转移监督事件头，但不能把同一采样窗口里的自动复位状态接到旧回合后面。
-            active = dynamics
-
-        coefficients = {
-            "state": 1.0, "pose": 0.5, "scan": 0.35, "force": 0.1,
-            "reward": 1.0, "contact": 0.2, "collision": 0.2, "terminal": 0.2,
-        }
-        metrics = {f"wm_{key}": float(torch.stack(values).mean().detach())
-                   for key, values in accum.items() if values}
-        loss = sum(coefficients[key] * torch.stack(values).mean()
-                   for key, values in accum.items() if values)
+                indices = keep[dynamics]
+                errors = {
+                    "state": (pred["state"][dynamics] - batch["next_state"][indices, t]) / scale[:STATE_DIM],
+                    "pose": (pred["pose_delta"][dynamics] - batch["pose"][indices, t]) / scale[STATE_DIM:STATE_DIM + POSE_DIM],
+                    "force": (pred["continuous"][dynamics, -FORCE_DIM:] - batch["next_force"][indices, t]) / scale[-FORCE_DIM:],
+                }
+                for key, error in errors.items():
+                    accum[key].append(error.square().mean() if key != "force" else
+                                      F.smooth_l1_loss(error, torch.zeros_like(error)))
+                accum["contact"].append(F.binary_cross_entropy_with_logits(
+                    pred["contact_logit"][dynamics], batch["next_contacts"][indices, t]))
+            accum["collision"].append(F.binary_cross_entropy_with_logits(
+                pred["collision_logit"], batch["collision"][keep, t]))
+            accum["terminal"].append(F.binary_cross_entropy_with_logits(
+                pred["terminated_logit"], batch["terminated"][keep, t]))
+            next_state = state.clone()
+            next_pose = pose.clone()
+            next_state[keep] = pred["state"]
+            next_pose[keep] = advance_pose(pose[keep], pred["pose_delta"])
+            state, pose = next_state, next_pose
+            active = active & valid[:, t]
+        coefficients = {"state": 1., "pose": 1., "force": .1, "contact": .1,
+                        "collision": 1., "terminal": .2}
+        if not any(accum.values()):
+            return {"wm_loss": 0.0}
+        means = {key: torch.stack(value).mean() for key, value in accum.items() if value}
+        loss = sum(coefficients[key] * value for key, value in means.items())
         self.model_optimizer.zero_grad(set_to_none=True)
         if torch.isfinite(loss):
             loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            if torch.isfinite(grad_norm):
+            grad = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            if torch.isfinite(grad):
                 self.model_optimizer.step()
             else:
-                self.model_optimizer.zero_grad(set_to_none=True)
                 self.skipped_updates += 1
         else:
             self.skipped_updates += 1
-        metrics["wm_loss"] = float(loss.detach())
-        return metrics
+        return {"wm_loss": float(loss.detach()),
+                **{f"wm_{key}": float(value.detach()) for key, value in means.items()}}
 
     def improve(self) -> dict[str, float]:
         args = self.args
@@ -371,16 +348,15 @@ class PointfootSuperMimicLearner:
         history = seed["history"].detach()
         previous = seed["previous"].detach()
         command = seed["command"].detach()
-        scan = seed["scan"].detach()
+        pose = seed["world_pose"].detach()
+        context = seed["context"].detach()
+        scan = self.field.scan(state, pose)
         contacts = seed["contacts"].detach()
         force = seed["force"].detach()
         # 保留每回合传感器零偏，仿真想象帧沿用当时可观测到的估计。
-        gyro_bias = history[:, 6:9] - state[:, 7:10]
-        joint_bias = history[:, 51:63] - state[:, 10:22]
-        critic_now = _critic_features(state, command, previous, scan, contacts, force)
-        with torch.no_grad():
-            self.critic.norm.update(critic_now)
-            self.target_critic.norm.load_state_dict(self.critic.norm.state_dict())
+        gyro_bias = seed["bias"][:, :3]
+        joint_bias = seed["bias"][:, 3:]
+        critic_now = _critic_features(state, command, previous, scan, context)
 
         rewards, continuations, critic_inputs, next_critic_inputs = [], [], [], []
         alive = torch.ones(args.imag_batch, 1, device=self.device)
@@ -394,21 +370,26 @@ class PointfootSuperMimicLearner:
         self.model.requires_grad_(False)
         for _ in range(args.horizon):
             critic_inputs.append(_critic_features(
-                state, command, previous, scan, contacts, force
+                state, command, previous, scan, context
             ).detach())
             action = self.actor(history)
-            pred = self.model(state, action, previous, command, scan)
+            pred = self.model(state, action, previous, context, scan)
             collision = pred["collision_logit"].sigmoid()
-            terminal = pred["terminated_logit"].sigmoid()
-            continuation = (1.0 - terminal) * (1.0 - collision)
-            reward = pred["reward_scaled"] * 5.0
+            next_state = pred["state"]
+            next_pose = advance_pose(pose, pred["pose_delta"])
+            next_scan = self.field.scan(next_state, next_pose)
+            gravity = F.normalize(next_state[:, 1:4], dim=-1, eps=1e-6)
+            survival = torch.sigmoid((-gravity[:, 2:3] - math.cos(math.radians(55))) / .08)
+            continuation = survival * (1.0 - collision)
+            reward = (0.02 * self.task_rewards.reward(
+                next_state, action, previous, command, next_scan, collision, 1.0 - continuation
+            ))[:, None]
             objective = objective + discount * alive * reward
             alive = alive * continuation
             rewards.append(reward)
             continuations.append(continuation)
 
-            state = pred["state"]
-            scan = pred["scan"]
+            state, pose, scan = next_state, next_pose, next_scan
             contacts = pred["contact_logit"].sigmoid()
             force = pred["force"]
             previous = action
@@ -416,7 +397,7 @@ class PointfootSuperMimicLearner:
             history = _push_history(history, frame)
             discount *= args.gamma
             next_critic_inputs.append(_critic_features(
-                state, command, previous, scan, contacts, force
+                state, command, previous, scan, context
             ))
 
         # Target Critic 参数被冻结，但不切断对末端想象状态的梯度；
@@ -432,6 +413,7 @@ class PointfootSuperMimicLearner:
             return {"actor_loss": float("nan")}
         actor_loss.backward()
         actor_grad = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+        torch.nn.utils.clip_grad_value_(self.actor.parameters(), 0.1)
         if torch.isfinite(actor_grad):
             self.actor_optimizer.step()
         else:
@@ -456,7 +438,6 @@ class PointfootSuperMimicLearner:
             target = torch.stack(targets[::-1]).reshape(-1)
 
         critic_x = torch.stack(critic_inputs).flatten(0, 1)
-        self.critic.norm.update(critic_x)
         critic_losses = []
         critic_grad_norms = []
         batch_size = critic_x.shape[0]

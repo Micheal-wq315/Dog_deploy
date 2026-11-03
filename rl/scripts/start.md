@@ -55,18 +55,19 @@
   --num_envs 8
 # 设计、网络维度、保存路径与边界说明：rl/SUPERMIMIC_MODEL_BASED.md
 
-# ★ 点足版 Go2W SuperMimic：独立分支 codex/pointfoot-supermimic-wm
-# 单世界模型教师 + 特权地形高度图 + 可微想象更新；Actor盲走，12维点足动作。
-# 默认64环境、40000次模型更新，每次采1个仿真步；headless并自动检查并发/阻止休眠。
-./rl/scripts/train_pointfoot_supermimic.sh --num_envs 64 \
-  --iterations 40000 --seed 42 --run_name 大狗点足版
-# 从教师checkpoint续训（累计总轮数），课程地形状态会恢复，回放池会重新采样。
-./rl/scripts/train_pointfoot_supermimic.sh --num_envs 64 \
-  --iterations 40000 --seed 42 --resume /path/to/teacher_latest.pt
-# GUI查看最新点足模型；关闭GUI前先停止其它Isaac Sim训练/测试。
+# ★ 点足版 Go2W SuperMimic v2：隔离分支 codex/pointfoot-supermimic-wm
+# 在 /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm 下执行。
+# 225维五帧盲Actor→12位置动作；静态地形查询、解析奖励、32步可微想象。
+# 1024环境、20000轮；日志和checkpoint默认写数据盘。
+./rl/scripts/train_pointfoot_supermimic_20k.sh
+# 续训，保持相同环境数；iterations是累计目标轮数。
+./rl/scripts/train_pointfoot_supermimic_20k.sh --resume /path/to/teacher_latest.pt
+# 当前正式运行日志（查看日志不占仿真实例）
+tail -f /media/rmer/data/rpwd_training/pointfoot_supermimic/train_20k_20261103.log
+# GUI回放须先停止训练。
 ./rl/scripts/play_pointfoot_supermimic.sh \
   --checkpoint /path/to/teacher_latest.pt --num_envs 1
-# 详细算法、楼梯奖励和限制：rl/SUPERMIMIC_POINTFOOT.md
+# 算法对齐范围、机器人适配差异和测试证据见 rl/SUPERMIMIC_POINTFOOT.md。
 
 # 从已保存教师checkpoint接续两万轮流程；阶段性能未达标仅记录，最终资格门槛仍保留
 ./rl/scripts/train_odin_pipeline.sh --num_envs 256 --seed 42 \

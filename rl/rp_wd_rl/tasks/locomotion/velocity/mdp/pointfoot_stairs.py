@@ -209,14 +209,14 @@ def pointfoot_terrain_curriculum(
     terrain = env.scene.terrain
     ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
     if not hasattr(env, "_pointfoot_course_caps"):
-        env._pointfoot_course_caps = torch.zeros(terrain.terrain_generator.num_cols,
+        env._pointfoot_course_caps = torch.zeros(terrain.cfg.terrain_generator.num_cols,
                                                 dtype=torch.long, device=env.device)
         env._pointfoot_course_trials = torch.zeros(
-            terrain.terrain_generator.num_cols, terrain.terrain_generator.num_rows,
+            terrain.cfg.terrain_generator.num_cols, terrain.cfg.terrain_generator.num_rows,
             performance_window, device=env.device
         )
         env._pointfoot_course_counts = torch.zeros(
-            terrain.terrain_generator.num_cols, terrain.terrain_generator.num_rows,
+            terrain.cfg.terrain_generator.num_cols, terrain.cfg.terrain_generator.num_rows,
             dtype=torch.long, device=env.device
         )
 
@@ -232,10 +232,10 @@ def pointfoot_terrain_curriculum(
         expected_z = 0.32 + 5.0 * h
         stable = ((-robot.data.projected_gravity_b[ids, 2] > 0.80)
                   & (robot.data.projected_gravity_b[ids, :2].norm(dim=-1) < 0.60))
-        stair_success = ((offset[:, 0] > 2.8) & (offset[:, 1].abs() < 2.5)
+        stair_success = ((offset[:, 0] > 3.3) & (offset[:, 1].abs() < 2.5)
                          & (offset[:, 2] > expected_z - 0.08)
                          & (offset[:, 2] < expected_z + 0.30) & stable & ~failed)
-        ordinary_success = (offset[:, 0] > 2.8) & stable & ~failed
+        ordinary_success = (offset[:, 0] > 3.3) & stable & ~failed
         success = torch.where(stairs, stair_success, ordinary_success) & active
 
         for index in range(len(ids)):
@@ -249,7 +249,7 @@ def pointfoot_terrain_curriculum(
             env._pointfoot_course_counts[terrain_type, level] += 1
             count += 1
             if (level == int(env._pointfoot_course_caps[terrain_type])
-                    and level < terrain.terrain_generator.num_rows - 1
+                    and level < terrain.cfg.terrain_generator.num_rows - 1
                     and count >= performance_window
                     and int(env.common_step_counter) >= minimum_steps[level + 1]
                     and env._pointfoot_course_trials[terrain_type, level].mean() >= pass_threshold):
@@ -258,10 +258,68 @@ def pointfoot_terrain_curriculum(
         next_level = torch.where(success, levels + 1, (levels - 1).clamp_min(0))
         caps = env._pointfoot_course_caps[types]
         terrain.terrain_levels[ids] = torch.minimum(next_level, caps).clamp_max(
-            terrain.terrain_generator.num_rows - 1
+            terrain.cfg.terrain_generator.num_rows - 1
         )
         terrain.env_origins[ids] = terrain.terrain_origins[
             terrain.terrain_levels[ids], terrain.terrain_types[ids]
         ]
 
     return terrain.terrain_levels.float().mean()
+
+
+def pointfoot_model_reward(env: ManagerBasedRLEnv, term: str) -> torch.Tensor:
+    """真实奖励和想象奖励调用同一组解析函数；在reset前保留碰撞监督。"""
+    cached = getattr(env, "_pointfoot_model_reward_cache", None)
+    if cached is None or cached[0] != env.common_step_counter:
+        from rp_wd_rl.supermimic.pointfoot_terrain import PointfootTaskRewards
+        robot = env.scene["robot"]
+        ids = env.action_manager.get_term("joint_pos")._joint_ids
+        names = list(robot.joint_names)[ids] if isinstance(ids, slice) else [robot.joint_names[i] for i in ids]
+        default = robot.data.default_joint_pos[0, ids]
+        task = getattr(env, "_pointfoot_task_rewards", None)
+        if task is None:
+            task = PointfootTaskRewards(names, default, robot.data.soft_joint_pos_limits[0, ids])
+            env._pointfoot_task_rewards = task
+        data = robot.data
+        field = getattr(env, "_pointfoot_field", None)
+        ground = (field.sample(data.root_pos_w[:, :2]) if field is not None else
+                  env.scene["height_scanner"].data.ray_hits_w[:, 0, 2])
+        state = torch.cat(((data.root_pos_w[:, 2] - ground)[:, None], data.projected_gravity_b,
+                           data.root_lin_vel_b, data.root_ang_vel_b,
+                           data.joint_pos[:, ids] - data.default_joint_pos[:, ids],
+                           data.joint_vel[:, ids]), -1)
+        if field is not None:
+            q = data.root_quat_w
+            yaw = torch.atan2(2 * (q[:, 0] * q[:, 3] + q[:, 1] * q[:, 2]),
+                              1 - 2 * (q[:, 2].square() + q[:, 3].square()))
+            pose = torch.cat((data.root_pos_w[:, :2], yaw[:, None]), -1)
+            scan = field.scan(state, pose)
+        else:
+            hits = env.scene["supermimic_terrain_scanner"].data.ray_hits_w[..., 2]
+            scan = (data.root_pos_w[:, 2:3] - hits).clamp(-1.5, 1.5)
+        sensor = env.scene["contact_forces"]
+        nonfoot = [name for name in robot.body_names if "FOOT_LINK" not in name]
+        sensor_ids, _ = sensor.find_bodies(nonfoot, preserve_order=True)
+        force = sensor.data.net_forces_w_history[:, :, sensor_ids].norm(dim=-1).amax(dim=(1, 2))
+        collision = (force > 10).float()
+        # env.step返回时终止环境已reset，必须先缓存这个时刻的真实碰撞标签。
+        env._pointfoot_transition_collision = collision[:, None].clone()
+        terms = task.terms(state, env.action_manager.action, env.action_manager.prev_action,
+                           env.command_manager.get_command("base_velocity"), scan, collision,
+                           env.termination_manager.terminated.float())
+        cached = (env.common_step_counter, terms)
+        env._pointfoot_model_reward_cache = cached
+    return cached[1][term]
+
+
+def pointfoot_supermimic_scan(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """21×13米制特权扫描，按Go2W的x-major顺序。"""
+    hits = env.scene["supermimic_terrain_scanner"].data.ray_hits_w[..., 2]
+    heights = env.scene["robot"].data.root_pos_w[:, 2:3] - hits
+    return torch.nan_to_num(heights, nan=1.5, posinf=1.5, neginf=-1.5).clamp(-1.5, 1.5)
+
+
+def pointfoot_course_exit(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """到达顶层后结束回合，避免穿出本赛道后被错误评估或跑入相邻环境。"""
+    delta = env.scene["robot"].data.root_pos_w - env.scene.env_origins
+    return (delta[:, 0] > 4.5) | (delta[:, 0] < -0.35) | (delta[:, 1].abs() > 2.7)

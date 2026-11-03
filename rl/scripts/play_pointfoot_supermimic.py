@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+import traceback
 
 from isaaclab.app import AppLauncher
 
@@ -59,5 +60,8 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    finally:
+    except BaseException:
+        traceback.print_exc()
+        shutdown(simulation_app, exit_code=1)
+    else:
         shutdown(simulation_app)
