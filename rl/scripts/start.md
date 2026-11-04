@@ -64,9 +64,13 @@
 ./rl/scripts/train_pointfoot_supermimic_20k.sh --resume /path/to/teacher_latest.pt
 # 当前正式运行日志（查看日志不占仿真实例）
 tail -f /media/rmer/data/rpwd_training/pointfoot_supermimic/train_20k_20261103.log
-# GUI回放须先停止训练。
+# 键盘GUI测试：自动加载数据盘最新正式模型；等级1为4cm台阶。
+./rl/scripts/play_pointfoot_supermimic.sh --teleop keyboard --terrain stairs --terrain_level 1
+# 平地测试：W/S前后、A/D横移、E左转/Q右转，空格停止，R复位；先点击仿真视口。
+./rl/scripts/play_pointfoot_supermimic.sh --teleop keyboard --terrain flat
+# 固定最新/指定模型回放；等级0/1/2/3/4/5分别为2/4/8/12/16/20cm。
 ./rl/scripts/play_pointfoot_supermimic.sh \
-  --checkpoint /path/to/teacher_latest.pt --num_envs 1
+  --checkpoint /path/to/teacher_latest.pt --terrain stairs --terrain_level 2
 # 算法对齐范围、机器人适配差异和测试证据见 rl/SUPERMIMIC_POINTFOOT.md。
 
 # 从已保存教师checkpoint接续两万轮流程；阶段性能未达标仅记录，最终资格门槛仍保留

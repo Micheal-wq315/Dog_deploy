@@ -40,6 +40,16 @@ tail -f /media/rmer/data/rpwd_training/pointfoot_supermimic/train_20k_20261103.l
 ./rl/scripts/train_pointfoot_supermimic_20k.sh --resume /path/to/teacher_latest.pt
 ```
 
+键盘测试命令（自动选择最新正式运行的最终模型）：
+
+```bash
+./rl/scripts/play_pointfoot_supermimic.sh --teleop keyboard --terrain stairs --terrain_level 1
+```
+
+先点击仿真视口；W/S前后、A/D横移、E左转/Q右转、空格停止、R复位；按住生效、松开回到零指令。默认幅值0.35m/s、0.05m/s、0.08rad/s，可用`--forward_speed`、`--lateral_speed`、`--yaw_speed`调整。当前训练主要覆盖向前上阶，倒退/零速/横移/转向效果须单独验证。`--terrain flat`改测平地；楼梯等级0..5对应2/4/8/12/16/20cm。回放固定地形等级并关闭课程晋级，键盘命令会立即写入Actor最新观测帧，避免随机指令覆盖；相机跟随机器人。
+
+2026-11-04验证：最新20000轮模型、2环境、4cm台阶、0.3m/s固定指令的5步headless回放通过；输入事件状态检查和静态契约通过。未运行GUI实际按键测试。
+
 本次格式为 `rp-wd-pointfoot-supermimic-v2`，225→12；v1的135维checkpoint和轮足16维部署策略均不兼容。
 
 ## 历史 v1 设计（以下保留追溯，不作为当前配置）
