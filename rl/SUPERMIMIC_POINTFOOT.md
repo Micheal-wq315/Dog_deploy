@@ -46,7 +46,7 @@ tail -f /media/rmer/data/rpwd_training/pointfoot_supermimic/train_20k_20261103.l
 ./rl/scripts/play_pointfoot_supermimic.sh --teleop keyboard --terrain stairs --terrain_level 1
 ```
 
-先点击仿真视口；W/S前后、A/D横移、E左转/Q右转、空格停止、R复位；按住生效、松开回到零指令。默认幅值0.35m/s、0.05m/s、0.08rad/s，可用`--forward_speed`、`--lateral_speed`、`--yaw_speed`调整。当前训练主要覆盖向前上阶，倒退/零速/横移/转向效果须单独验证。`--terrain flat`改测平地；楼梯等级0..5对应2/4/8/12/16/20cm。回放固定地形等级并关闭课程晋级，键盘命令会立即写入Actor最新观测帧，避免随机指令覆盖；相机跟随机器人。
+先点击仿真视口；W/S前后、A/D横移、E左转/Q右转、空格停止、R复位；按住生效、松开回到零指令。默认幅值0.35m/s、0.05m/s、0.08rad/s，可用`--forward_speed`、`--lateral_speed`、`--yaw_speed`调整。当前训练主要覆盖向前上阶，倒退/零速/横移/转向效果须单独验证。`--terrain flat`改测平地；楼梯等级0..5对应2/4/8/12/16/20cm。回放固定地形等级并关闭课程晋级；默认关闭全部自动复位（包括超时、赛道出口、摔倒和低高度），按R手动复位，`--auto-reset`可恢复训练时的终止逻辑。键盘命令会立即写入Actor最新观测帧，避免随机指令覆盖；相机跟随机器人。
 
 2026-11-04验证：最新20000轮模型、2环境、4cm台阶、0.3m/s固定指令的5步headless回放通过；输入事件状态检查和静态契约通过。未运行GUI实际按键测试。
 

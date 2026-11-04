@@ -15,6 +15,8 @@ parser.add_argument("--checkpoint", default=None, help="省略时加载数据盘
 parser.add_argument("--task", default="Isaac-Velocity-Rough-RPWD-Pointfoot-SuperMimic-WM-v0")
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--max_steps", type=int, default=0)
+parser.add_argument("--auto-reset", action="store_true",
+                    help="恢复训练的自动复位条件；默认关闭自动复位，仅按R手动复位")
 parser.add_argument("--teleop", choices=["keyboard"], default=None)
 parser.add_argument("--terrain", choices=["mixed", "flat", "stairs", "rough"], default="mixed")
 parser.add_argument("--terrain_level", type=int, choices=range(6), default=0,
@@ -106,6 +108,10 @@ def main() -> None:
     cfg = parse_env_cfg(args.task, device=str(device), num_envs=args.num_envs)
     cfg.seed = int(checkpoint.get("config", {}).get("seed", 42))
     cfg.curriculum.terrain_levels = None
+    if not args.auto_reset:
+        # 空终止配置同时关闭超时、赛道出口、触地/倾倒和低高度复位。
+        # 用户可以持续驾驶，只有下方R键分支显式调用env.reset()。
+        cfg.terminations = {}
     cfg.observations.policy.enable_corruption = False
     generator = cfg.scene.terrain.terrain_generator
     if args.terrain != "mixed":
@@ -139,7 +145,8 @@ def main() -> None:
         term = env.unwrapped.command_manager.get_term("base_velocity")
         command_start = sum(FRAME_DIMS[:2]) * HISTORY + FRAME_DIMS[2] * (HISTORY - 1)
         print(f"[回放] checkpoint={checkpoint_path} GUI={not args.headless} "
-              f"地形={args.terrain} 等级={args.terrain_level}", flush=True)
+              f"地形={args.terrain} 等级={args.terrain_level} "
+              f"自动复位={'开启' if args.auto_reset else '关闭（仅R手动复位）'}", flush=True)
         if keyboard:
             print("[键盘] 先点击仿真视口；W/S前后，A/D横移，E左转、Q右转；空格停止，R复位。按住生效，松开归零。", flush=True)
             print(f"[键盘] vx=±{args.forward_speed}m/s，vy=±{args.lateral_speed}m/s，wz=±{args.yaw_speed}rad/s。"

@@ -65,6 +65,7 @@
 # 当前正式运行日志（查看日志不占仿真实例）
 tail -f /media/rmer/data/rpwd_training/pointfoot_supermimic/train_20k_20261103.log
 # 键盘GUI测试：自动加载数据盘最新正式模型；等级1为4cm台阶。
+# 默认不会因走远、超时或摔倒自动复位，按R手动复位；加--auto-reset可恢复自动复位。
 ./rl/scripts/play_pointfoot_supermimic.sh --teleop keyboard --terrain stairs --terrain_level 1
 # 平地测试：W/S前后、A/D横移、E左转/Q右转，空格停止，R复位；先点击仿真视口。
 ./rl/scripts/play_pointfoot_supermimic.sh --teleop keyboard --terrain flat
