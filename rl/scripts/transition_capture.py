@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 
 @contextmanager
-def capture_before_reset(manager, capture):
+def capture_before_reset(manager, capture, *, honor_captured_termination=False):
     """临时包装终止计算；即使抛异常也恢复原方法，不丢弃任何物理接触步。"""
     original = manager.compute
     snapshots = []
@@ -12,7 +12,8 @@ def capture_before_reset(manager, capture):
     def compute(*args, **kwargs):
         result = original(*args, **kwargs)
         snapshots.append(capture())
-        return result
+        # 训练可在快照回调识别非有限物理状态并写入terminated，确保先标失败再结算课程。
+        return manager.dones if honor_captured_termination else result
 
     manager.compute = compute
     try:

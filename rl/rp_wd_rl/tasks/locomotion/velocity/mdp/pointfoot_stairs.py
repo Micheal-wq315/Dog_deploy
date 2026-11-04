@@ -220,6 +220,8 @@ def pointfoot_terrain_curriculum(
             dtype=torch.long, device=env.device
         )
 
+    # 首次reset/续训恢复不是一条失败回合，不能无条件把保存等级降一级。
+    ids = ids[env.episode_length_buf[ids] > 0]
     if len(ids):
         levels = terrain.terrain_levels[ids].clone()
         types = terrain.terrain_types[ids]
@@ -267,47 +269,73 @@ def pointfoot_terrain_curriculum(
     return terrain.terrain_levels.float().mean()
 
 
+def _pointfoot_reward_measurements(env: ManagerBasedRLEnv):
+    """终止、奖励和日志共用同一物理帧的支撑面与脚载荷测量。"""
+    cached = getattr(env, "_pointfoot_reward_measurements", None)
+    if cached is not None and cached[0] == env.common_step_counter:
+        return cached[1]
+    from rp_wd_rl.supermimic.pointfoot_terrain import PointfootTaskRewards
+    robot = env.scene["robot"]
+    ids = env.action_manager.get_term("joint_pos")._joint_ids
+    names = list(robot.joint_names)[ids] if isinstance(ids, slice) else [robot.joint_names[i] for i in ids]
+    task = getattr(env, "_pointfoot_task_rewards", None)
+    if task is None:
+        task = PointfootTaskRewards(
+            names, robot.data.default_joint_pos[0, ids], robot.data.soft_joint_pos_limits[0, ids],
+            profile="full" if getattr(env.cfg, "supermimic_revision", 2) >= 3 else "legacy")
+        env._pointfoot_task_rewards = task
+    data = robot.data
+    field = getattr(env, "_pointfoot_field", None)
+    ground = (field.sample(data.root_pos_w[:, :2]) if field is not None else
+              env.scene["height_scanner"].data.ray_hits_w[:, 0, 2])
+    state = torch.cat(((data.root_pos_w[:, 2] - ground)[:, None], data.projected_gravity_b,
+                       data.root_lin_vel_b, data.root_ang_vel_b,
+                       data.joint_pos[:, ids] - data.default_joint_pos[:, ids], data.joint_vel[:, ids]), -1)
+    if field is not None:
+        q = data.root_quat_w
+        yaw = torch.atan2(2 * (q[:, 0] * q[:, 3] + q[:, 1] * q[:, 2]),
+                          1 - 2 * (q[:, 2].square() + q[:, 3].square()))
+        scan = field.scan(state, torch.cat((data.root_pos_w[:, :2], yaw[:, None]), -1))
+    else:
+        hits = env.scene["supermimic_terrain_scanner"].data.ray_hits_w[..., 2]
+        scan = (data.root_pos_w[:, 2:3] - hits).clamp(-1.5, 1.5)
+    sensor = env.scene["contact_forces"]
+    nonfoot = [name for name in robot.body_names if "FOOT_LINK" not in name]
+    sensor_ids, _ = sensor.find_bodies(nonfoot, preserve_order=True)
+    force = sensor.data.net_forces_w_history[:, :, sensor_ids].norm(dim=-1).amax(dim=(1, 2))
+    collision = (force > 10).float()
+    feet = [f"{leg}_FOOT_LINK" for leg in ("LF", "RF", "LB", "RB")]
+    foot_ids, _ = sensor.find_bodies(feet, preserve_order=True)
+    if getattr(env.cfg, "supermimic_revision", 2) >= 3:
+        foot_force = sensor.data.net_forces_w[:, foot_ids].norm(dim=-1)
+    else:
+        foot_force = sensor.data.net_forces_w_history[:, :, foot_ids].norm(dim=-1).amax(dim=1)
+    contacts = (foot_force > 8.0).float()
+    foot_force = foot_force.clamp(0, 500) / 500
+    values = task, state, scan, contacts, foot_force, collision
+    env._pointfoot_reward_measurements = env.common_step_counter, values
+    return values
+
+
+def pointfoot_support_clearance(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """与full解析奖励完全相同的脚下支撑面净空，供低高度终止使用。"""
+    task, state, scan, contacts, force, _ = _pointfoot_reward_measurements(env)
+    return task.support_clearance(state, scan, contacts, force)
+
+
 def pointfoot_model_reward(env: ManagerBasedRLEnv, term: str) -> torch.Tensor:
-    """真实奖励和想象奖励调用同一组解析函数；在reset前保留碰撞监督。"""
+    """真实奖励和想象奖励共享解析函数，物理帧在自动reset前完成计算。"""
     cached = getattr(env, "_pointfoot_model_reward_cache", None)
     if cached is None or cached[0] != env.common_step_counter:
-        from rp_wd_rl.supermimic.pointfoot_terrain import PointfootTaskRewards
-        robot = env.scene["robot"]
-        ids = env.action_manager.get_term("joint_pos")._joint_ids
-        names = list(robot.joint_names)[ids] if isinstance(ids, slice) else [robot.joint_names[i] for i in ids]
-        default = robot.data.default_joint_pos[0, ids]
-        task = getattr(env, "_pointfoot_task_rewards", None)
-        if task is None:
-            task = PointfootTaskRewards(names, default, robot.data.soft_joint_pos_limits[0, ids])
-            env._pointfoot_task_rewards = task
-        data = robot.data
-        field = getattr(env, "_pointfoot_field", None)
-        ground = (field.sample(data.root_pos_w[:, :2]) if field is not None else
-                  env.scene["height_scanner"].data.ray_hits_w[:, 0, 2])
-        state = torch.cat(((data.root_pos_w[:, 2] - ground)[:, None], data.projected_gravity_b,
-                           data.root_lin_vel_b, data.root_ang_vel_b,
-                           data.joint_pos[:, ids] - data.default_joint_pos[:, ids],
-                           data.joint_vel[:, ids]), -1)
-        if field is not None:
-            q = data.root_quat_w
-            yaw = torch.atan2(2 * (q[:, 0] * q[:, 3] + q[:, 1] * q[:, 2]),
-                              1 - 2 * (q[:, 2].square() + q[:, 3].square()))
-            pose = torch.cat((data.root_pos_w[:, :2], yaw[:, None]), -1)
-            scan = field.scan(state, pose)
-        else:
-            hits = env.scene["supermimic_terrain_scanner"].data.ray_hits_w[..., 2]
-            scan = (data.root_pos_w[:, 2:3] - hits).clamp(-1.5, 1.5)
-        sensor = env.scene["contact_forces"]
-        nonfoot = [name for name in robot.body_names if "FOOT_LINK" not in name]
-        sensor_ids, _ = sensor.find_bodies(nonfoot, preserve_order=True)
-        force = sensor.data.net_forces_w_history[:, :, sensor_ids].norm(dim=-1).amax(dim=(1, 2))
-        collision = (force > 10).float()
-        # env.step返回时终止环境已reset，必须先缓存这个时刻的真实碰撞标签。
+        task, state, scan, contacts, force, collision = _pointfoot_reward_measurements(env)
         env._pointfoot_transition_collision = collision[:, None].clone()
+        if getattr(env.cfg, "supermimic_revision", 2) >= 3:
+            from .pointfoot_full import update_full_course_step
+            update_full_course_step(env)
         terms = task.terms(state, env.action_manager.action, env.action_manager.prev_action,
                            env.command_manager.get_command("base_velocity"), scan, collision,
-                           env.termination_manager.terminated.float())
-        cached = (env.common_step_counter, terms)
+                           env.termination_manager.terminated.float(), contacts=contacts, force=force)
+        cached = env.common_step_counter, terms
         env._pointfoot_model_reward_cache = cached
     return cached[1][term]
 

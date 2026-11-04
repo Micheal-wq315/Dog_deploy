@@ -55,6 +55,22 @@
   --num_envs 8
 # 设计、网络维度、保存路径与边界说明：rl/SUPERMIMIC_MODEL_BASED.md
 
+# ★ 点足 SuperMimic 完整任务v3（停止/前后/横移/原地转向＋六类双向地形）
+# 在 /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm 下执行。
+# 默认1024环境/40000轮；高度0.22–0.42m内零惩罚，起伏放宽至0.20–0.44m。
+./rl/scripts/train_pointfoot_supermimic_full.sh
+./rl/scripts/train_pointfoot_supermimic_full.sh --iterations 20000
+./rl/scripts/train_pointfoot_supermimic_full.sh --resume /path/to/full_teacher_latest.pt
+# 旧模型迁移只使用Actor，不继承旧奖励/优化器/课程。
+./rl/scripts/train_pointfoot_supermimic_full.sh --init_actor /path/to/old_teacher_final.pt
+# 确定性评测：JSON/CSV记录每方向和地形的真实指标，不能与训练奖励混为一谈。
+./rl/scripts/evaluate_pointfoot_supermimic.sh --checkpoint /path/to/full_teacher_final.pt --suite commands
+./rl/scripts/evaluate_pointfoot_supermimic.sh --checkpoint /path/to/full_teacher_final.pt --suite all --levels 0 1 2 3
+# 回放从checkpoint自动选择正确任务；默认只有R键手动复位。
+./rl/scripts/play_pointfoot_supermimic.sh --checkpoint /path/to/full_teacher_final.pt --teleop keyboard --terrain flat
+./rl/scripts/play_pointfoot_supermimic.sh --checkpoint /path/to/full_teacher_final.pt --teleop keyboard --terrain down --terrain_level 2
+# 课程/奖励/源码映射见 rl/SUPERMIMIC_POINTFOOT_FULL.md。
+
 # ★ 点足版 Go2W SuperMimic v2：隔离分支 codex/pointfoot-supermimic-wm
 # 在 /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm 下执行。
 # 225维五帧盲Actor→12位置动作；静态地形查询、解析奖励、32步可微想象。

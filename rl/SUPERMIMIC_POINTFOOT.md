@@ -1,5 +1,7 @@
 # 点足版 SuperMimic 训练设计
 
+**当前完整任务设计见 [SUPERMIMIC_POINTFOOT_FULL.md](SUPERMIMIC_POINTFOOT_FULL.md)。** 新增独立Full-v0任务，包含停止/前后/横移/转向和六类双向地形；采用支撑面高度区间。以下v2/v1保留为旧单向模型的追溯说明。
+
 ## 当前版本 v2（2026-11-03）
 
 当前分支为 `codex/pointfoot-supermimic-wm`。参考本地 Go2W SuperMimic 的 `a299ed5f5571da4492b8a286d94acfe4a86128e1`，本次使用相同的核心模型式训练流程：真实单步采样、自回归世界模型、冻结模型权重的可微想象、全折扣回报 Actor 目标、末端目标 Critic 和 TD(λ) Critic 更新。模型是12关节点足盲策略，Actor不接收高度图或深度图。

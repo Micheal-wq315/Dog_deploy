@@ -146,3 +146,14 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:RPWDOdinDepthPPORunnerCfg",
     },
 )
+
+
+# 完整点足任务与旧单向上阶任务独立注册，避免旧checkpoint被静默换成新课程。
+gym.register(
+    id="Isaac-Velocity-Rough-RPWD-Pointfoot-SuperMimic-Full-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.rp_wd_pointfoot_full_env_cfg:RPWDPointfootFullEnvCfg",
+    },
+)
