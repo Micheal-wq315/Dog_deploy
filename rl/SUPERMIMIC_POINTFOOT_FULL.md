@@ -115,7 +115,7 @@ cd /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm
 
 ## 验证与结果边界
 
-本次完成代码与集成验证，未启动新的长期训练：
+开发阶段的代码与集成验证结果：
 
 - 83项CPU测试及52个子用例通过，覆盖高度区间/梯度、20cm跨阶支撑面、FK脚滑、方向分布、课程晋级/恢复、环形档案、NaN恢复与健康行历史保护、真实落地和自动reset后的计数隔离。
 - 32环境20轮短回合训练完成13次Actor更新，跳过更新0、无效环境恢复0；从该checkpoint恢复到22轮通过。
@@ -125,3 +125,14 @@ cd /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm
 验证日志位于数据盘的 `pointfoot_full_v3_*_20261104.log`，验收数据为 `/media/rmer/data/rpwd_training/pointfoot_evaluations/full_v3_validation_20261104/`。具体结果同时记录在 `DEVELOPMENT.md` 的版本表。短回合训练用于检查模型更新、reset与课程保存/恢复；评测的`--max_steps`仅用于工具冒烟，输出明确标记`smoke_only=true`。这些测试不证明新策略已学会运动或上阶。
 
 上一轮20000轮单向模型可用于对照。完整任务需要新一轮训练后，再根据分方向误差、停止漂移、各高度的真实稳定通过率判定效果，不能只凭总奖励或平均地形等级下结论。
+
+
+## 首次正式实验（2026-11-04）
+
+22:13起从零运行1024环境、20000轮、seed42；未加载旧单向策略。服务为 `rpwd-pointfoot-full-v3-20k-20261104.service`。首批350轮已完成51次策略更新，无跳过更新或无效状态恢复；这仅是启动检查，不是训练效果验收。
+
+运行目录：`/media/rmer/data/rpwd_training/pointfoot_supermimic_full/2026-11-04_22-13-30_大狗点足版_完整任务_v3/`。
+
+```bash
+tail -f /media/rmer/data/rpwd_training/pointfoot_supermimic_full/train_v3_20k_20261104.log
+```
