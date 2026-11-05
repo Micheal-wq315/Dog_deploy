@@ -28,6 +28,7 @@ from rp_wd_rl.supermimic.pointfoot_courses import (
     FOOT_RADIUS,
     FullCourseHistory,
     STAIR_TREAD,
+    STEP_HEIGHTS,
     column_kind_indices,
     pointfoot_full_course,
     sample_mixed_commands,
@@ -40,6 +41,7 @@ class PointfootFullCourseCfg(SubTerrainBaseCfg):
     function = pointfoot_full_course
     kind: str = "flat"
     stair_tread: float = STAIR_TREAD
+    step_heights: tuple = STEP_HEIGHTS
 
 
 def _ids(env, env_ids):
@@ -60,6 +62,9 @@ def _history(env):
             caps=getattr(env, "_pointfoot_course_caps", None),
             trials=getattr(env, "_pointfoot_course_trials", None),
             counts=getattr(env, "_pointfoot_course_counts", None),
+            pass_rate=getattr(env.cfg, "terrain_pass_rate", .60),
+            minimum_trials=getattr(env.cfg, "terrain_minimum_trials", 64),
+            require_gait_quality=getattr(env.cfg, "supermimic_revision", 2) >= 4,
         )
         env._pointfoot_full_course = history
         env._pointfoot_course_caps = history.caps
@@ -115,6 +120,9 @@ def update_full_course_step(env):
     # 使用当前力而非三帧最大值，防止把起跳前的旧接触当成当前着地。
     force = sensor.data.net_forces_w[:, sensor_ids].norm(dim=-1)
     contact = force > 8.
+    if getattr(env.cfg, "supermimic_revision", 2) >= 4:
+        from rp_wd_rl.supermimic.pointfoot_gait import foot_support_mask
+        contact = foot_support_mask(sensor.data.net_forces_w[:, sensor_ids])
     origin = env.scene.env_origins
     offset = robot.data.root_pos_w - origin
     bottom = robot.data.body_pos_w[:, body_ids, 2] - FOOT_RADIUS - origin[:, 2:3]
@@ -122,6 +130,7 @@ def update_full_course_step(env):
     passed_now = stable_course_pass(
         offset, robot.data.projected_gravity_b, env.scene.terrain.terrain_levels, kinds,
         bottom, contact, robot.data.root_lin_vel_w[:, 2],
+        step_heights=getattr(env.cfg, "pointfoot_step_heights", STEP_HEIGHTS),
     )
     base_ids, _ = sensor.find_bodies("base_link", preserve_order=True)
     if len(base_ids):
@@ -162,8 +171,12 @@ class PointfootFullVelocityCommand(UniformVelocityCommand):
             self.time_left[ids] = 1e9
             return
         history = _history(self._env)
+        traverse_mask = full_stair_mask(self._env)[ids]
+        if getattr(self._env.cfg, "supermimic_revision", 2) >= 4:
+            # 平台/坡/碎石也需完整遍历；旧版3–6秒换向常使35秒内到不了5.4m终点。
+            traverse_mask = full_kind_indices(self._env)[ids] != COURSE_KINDS.index("flat")
         values, traverse = sample_mixed_commands(
-            len(ids), full_stair_mask(self._env)[ids], history.limits,
+            len(ids), traverse_mask, history.limits,
             stop_probability=self.cfg.rel_standing_envs,
         )
         self.vel_command_b[ids] = values
@@ -219,6 +232,7 @@ full_course_load_state_dict = load_full_course_state_dict
 def full_summary(env):
     """六种地形×六等级统计、最近通过率、列上限和当前卡住数量。"""
     result = _history(env).summary()
+    result["step_heights"] = list(getattr(env.cfg, "pointfoot_step_heights", STEP_HEIGHTS))
     terrain = env.scene.terrain
     kinds = full_kind_indices(env)
     state = _episode_state(env)
@@ -232,6 +246,13 @@ def full_summary(env):
             terrain.terrain_levels[selected & state["stuck"]], minlength=len(COMMAND_LIMITS)
         ).tolist()
     return result
+
+
+def update_gait_quality(env, metrics):
+    from rp_wd_rl.supermimic.pointfoot_gait import gait_quality_ready
+    history = _history(env)
+    history.gait_ready = gait_quality_ready(metrics)
+    return history.gait_ready
 
 
 def full_terrain_curriculum(env, env_ids):

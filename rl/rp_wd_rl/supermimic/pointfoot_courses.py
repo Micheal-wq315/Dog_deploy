@@ -73,7 +73,7 @@ def pointfoot_full_course(difficulty: float, cfg):
     if kind not in COURSE_KINDS:
         raise ValueError(kind)
     level = difficulty_level(difficulty)
-    height = STEP_HEIGHTS[level]
+    height = getattr(cfg, "step_heights", STEP_HEIGHTS)[level]
     cx, cy = sx / 2, sy / 2
     bottom = -.20
     meshes = []
@@ -200,13 +200,14 @@ def sample_mixed_commands(count: int, stairs: torch.Tensor, limits: Sequence[flo
     return mix_commands(values, stairs, limits=limits, stop_probability=stop_probability, generator=generator)
 
 
-def stable_course_pass(offset, gravity, levels, kinds, foot_bottom, contact, vertical_speed):
+def stable_course_pass(offset, gravity, levels, kinds, foot_bottom, contact, vertical_speed,
+                       step_heights=STEP_HEIGHTS):
     """当前帧真实落地判定；调用方再要求连续稳定若干策略步。
 
     offset/foot_bottom 都相对出生原点；下阶 landing 是负的 5h。至少两只
     接触脚必须落在最终踏面高度上，悬空、倾斜或下落穿线都不算通过。
     """
-    h = offset.new_tensor(STEP_HEIGHTS)[levels]
+    h = offset.new_tensor(step_heights)[levels]
     up, down = kinds == COURSE_KINDS.index("up"), kinds == COURSE_KINDS.index("down")
     slope = kinds == COURSE_KINDS.index("slope")
     landing = torch.where(up, NUM_STEPS * h, torch.where(down, -NUM_STEPS * h, torch.zeros_like(h)))
@@ -231,7 +232,13 @@ class FullCourseHistory:
     为 stats、command_stage、iteration、velocity_mae；均包含于 state_dict。
     """
 
-    def __init__(self, column_kinds, rows=6, device="cpu", *, caps=None, trials=None, counts=None):
+    def __init__(self, column_kinds, rows=6, device="cpu", *, caps=None, trials=None, counts=None,
+                 pass_rate=.60, minimum_trials=HISTORY_WINDOW, require_gait_quality=False):
+        if not 0 < pass_rate <= 1 or minimum_trials < HISTORY_WINDOW:
+            raise ValueError("地形晋级必须至少64回合且通过率在(0,1]内")
+        self.pass_rate, self.minimum_trials = pass_rate, minimum_trials
+        self.require_gait_quality = require_gait_quality
+        self.gait_ready = not require_gait_quality
         self.column_kinds = torch.as_tensor(column_kinds, dtype=torch.long, device=device)
         cols = len(self.column_kinds)
         if rows != len(STEP_HEIGHTS) or cols < 1:
@@ -272,9 +279,10 @@ class FullCourseHistory:
             self.trials[col, row, slots] = results[-kept:]
             self.counts[col, row] += len(results)
             if (row == int(self.caps[col]) and row < self.rows - 1
-                    and int(self.counts[col, row]) >= HISTORY_WINDOW
+                    and int(self.counts[col, row]) >= self.minimum_trials
                     and self.iteration >= MIN_ITERATIONS[row + 1]
-                    and self.trials[col, row].mean() >= .60):
+                    and self.gait_ready
+                    and self.trials[col, row].mean() >= self.pass_rate):
                 self.caps[col] += 1
 
     def recent(self, kind: int, level: int):
@@ -296,12 +304,13 @@ class FullCourseHistory:
             return stage
         accurate = torch.isfinite(error).all() & (error >= 0).all() & (error < error.new_tensor((.18, .18, .30))).all()
         quality = [self.recent(COURSE_KINDS.index(kind), stage) for kind in ("up", "down")]
-        if bool(accurate) and all(count >= HISTORY_WINDOW and rate >= .60 for count, rate in quality):
+        if self.gait_ready and bool(accurate) and all(count >= HISTORY_WINDOW and rate >= .60 for count, rate in quality):
             self.command_stage += 1
         return self.command_stage
 
     def state_dict(self):
-        return {"version": 3, "column_kinds": self.column_kinds.detach().cpu().clone(),
+        return {"version": 3, "gait_ready": self.gait_ready,
+                "column_kinds": self.column_kinds.detach().cpu().clone(),
                 "caps": self.caps.detach().cpu().clone(), "trials": self.trials.detach().cpu().clone(),
                 "counts": self.counts.detach().cpu().clone(), "stats": self.stats.detach().cpu().clone(),
                 "command_stage": self.command_stage, "iteration": self.iteration,
@@ -323,9 +332,12 @@ class FullCourseHistory:
         for key in ("caps", "trials", "counts", "stats", "velocity_mae"):
             getattr(self, key).copy_(torch.as_tensor(state[key]))
         self.command_stage, self.iteration = stage, iteration
+        self.gait_ready = bool(state.get("gait_ready", not self.require_gait_quality))
 
     def summary(self):
         result = {"revision": 3, "iteration": self.iteration, "command_stage": self.command_stage,
+                  "gait_ready": self.gait_ready, "terrain_pass_rate": self.pass_rate,
+                  "minimum_trials": self.minimum_trials,
                   "command_limits": list(self.limits),
                   "velocity_mae": [float(v) if math.isfinite(float(v)) else None for v in self.velocity_mae],
                   "column_kinds": [COURSE_KINDS[k] for k in self.column_kinds.tolist()],

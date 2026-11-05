@@ -50,6 +50,8 @@ parser.add_argument("--actor_schedule_start", type=int, default=0)
 parser.add_argument("--lr_decay_iterations", type=int, default=20000)
 parser.add_argument("--lr_final_frac", type=float, default=0.2)
 parser.add_argument("--action_noise", type=float, default=0.15)
+parser.add_argument("--action_noise_final", type=float, default=None)
+parser.add_argument("--noise_decay_iterations", type=int, default=8000)
 parser.add_argument("--critic_epochs", type=int, default=5)
 parser.add_argument("--critic_minibatches", type=int, default=4)
 parser.add_argument("--save_interval", type=int, default=500)
@@ -63,6 +65,8 @@ if unknown:
     parser.error("未识别的参数：" + " ".join(unknown))
 if args.resume and args.init_actor:
     parser.error("--resume和--init_actor只选一种")
+if args.action_noise < 0 or (args.action_noise_final is not None and args.action_noise_final < 0) or args.noise_decay_iterations < 1:
+    parser.error("探索噪声不得为负，退火轮数必须为正")
 if min(args.archive_windows, args.success_archive_windows) < 0 or min(args.wm_diagnostics_interval, args.diagnostic_batch) < 1:
     parser.error("归档容量不得为负，诊断周期和批次必须为正数")
 if args.episode_length_s is not None and args.episode_length_s <= 0:
@@ -182,7 +186,8 @@ def _training_contract(env, adapter):
     scale = torch.as_tensor(action._scale).reshape(-1)[:ACTION_DIM].cpu().tolist()
     return {
         "task": args.task, "task_revision": int(getattr(cfg, "supermimic_revision", 2)),
-        "seed": args.seed, "num_envs": env.num_envs, "policy_dim": POLICY_DIM,
+        "seed": args.seed, "num_envs": env.num_envs,
+        "policy_dim": POLICY_DIM + (2 if adapter.gait_enabled else 0),
         "action_dim": ACTION_DIM, "policy_dt": env.step_dt,
         "episode_length_s": cfg.episode_length_s,
         "hard_min_height": adapter.task_rewards.hard_min_height,
@@ -230,6 +235,17 @@ def _main() -> None:
                       "rl/rp_wd_rl/supermimic/pointfoot_courses.py",
                       "rl/rp_wd_rl/tasks/locomotion/velocity/mdp/pointfoot_full.py",
                       "rl/rp_wd_rl/tasks/locomotion/velocity/rp_wd_pointfoot_full_env_cfg.py"]
+        if adapter.gait_enabled:
+            code_paths += ["rl/rp_wd_rl/supermimic/pointfoot_gait.py",
+                           "rl/rp_wd_rl/supermimic/pointfoot_gait_rewards.py",
+                           "rl/rp_wd_rl/supermimic/pointfoot.py",
+                           "rl/rp_wd_rl/tasks/locomotion/velocity/rp_wd_pointfoot_gait_env_cfg.py"]
+            from rp_wd_rl.supermimic.pointfoot_gait import gait_parameters
+            contract["gait"] = {**gait_parameters(), "terrain_pass_rate": env.unwrapped.cfg.terrain_pass_rate,
+                                "minimum_trials": env.unwrapped.cfg.terrain_minimum_trials}
+            contract["step_heights"] = list(env.unwrapped.cfg.pointfoot_step_heights)
+            contract["exploration"] = {"initial": args.action_noise, "final": args.action_noise_final,
+                                        "decay_iterations": args.noise_decay_iterations}
         contract["task_code_hash"] = hashlib.sha256(b"".join((REPO_ROOT / p).read_bytes() for p in code_paths)).hexdigest()
     with (run_dir / "training_contract.json").open("w", encoding="utf-8") as stream:
         json.dump(contract, stream, ensure_ascii=False, indent=2)
@@ -242,7 +258,9 @@ def _main() -> None:
     if args.init_actor:
         initial = torch.load(args.init_actor, map_location=env.unwrapped.device, weights_only=True)
         if initial.get("format") != FORMAT:
-            raise ValueError("init_actor需要225维点足SuperMimic checkpoint")
+            raise ValueError("init_actor需要点足SuperMimic checkpoint")
+        if bool(initial.get("gait_enabled", False)) != adapter.gait_enabled:
+            raise ValueError("v4相位残差策略与旧225维碎步策略不兼容；请从零训练新步态")
         learner.actor.load_state_dict(initial["actor"])
         print(f"[信息] 只迁移Actor：{args.init_actor}；世界模型/价值/优化器/课程均从零开始", flush=True)
     start_iteration = 0
@@ -303,6 +321,8 @@ def _main() -> None:
         interval_mode_falls = torch.zeros(len(COMMAND_MODE_NAMES), device=env.unwrapped.device)
         interval_clearance = torch.zeros(2, device=env.unwrapped.device)
         interval_valid = interval_steps = interval_falls = invalid_env_resets = 0
+        from rp_wd_rl.supermimic.pointfoot_gait import PointfootGaitMetrics
+        gait_metrics = PointfootGaitMetrics(env.unwrapped.num_envs, env.unwrapped.device, env.unwrapped.step_dt)
         began = time.monotonic()
         replay_mib = sum(t.numel() * t.element_size() for t in learner.replay.data.values()) / 2**20
         print(f"[信息] 回放容量={args.buffer_len}步，显存约{replay_mib:.1f}MiB", flush=True)
@@ -312,16 +332,27 @@ def _main() -> None:
                 policy_metrics = {}
                 for _ in range(args.steps_per_iteration):
                     with torch.no_grad():
-                        learner.actor.norm.update(current["history"])
-                        action_mean = learner.actor(current["history"])
+                        actor_features = (learner.actor.features(current["history"], current["phase"])
+                                          if adapter.gait_enabled else current["history"])
+                        learner.actor.norm.update(actor_features)
                         rho = 0.95
+                        noise_std = args.action_noise
+                        if args.action_noise_final is not None:
+                            fraction = min(1., iteration / args.noise_decay_iterations)
+                            noise_std += fraction * (args.action_noise_final - args.action_noise)
                         ou_noise.mul_(rho).add_(
-                            torch.randn_like(ou_noise), alpha=args.action_noise * (1.0 - rho**2) ** 0.5
+                            torch.randn_like(ou_noise), alpha=noise_std * (1.0 - rho**2) ** 0.5
                         )
-                        action = (action_mean + ou_noise).clamp(-1.0, 1.0)
+                        if adapter.gait_enabled:
+                            action = learner.actor(current["history"], current["phase"], noise=ou_noise)
+                        else:
+                            action = (learner.actor(current["history"]) + ou_noise).clamp(-1.0, 1.0)
                         current = {key: value.clone() for key, value in current.items()}
                         critic_real = torch.cat((current["state"], current["command"], current["context"],
                                                  previous, current["scan"]), -1)
+                        if adapter.gait_enabled:
+                            from rp_wd_rl.supermimic.pointfoot_gait import phase_features
+                            critic_real = torch.cat((critic_real, phase_features(current["phase"])), -1)
                         learner.critic.norm.update(critic_real)
                         learner.target_critic.norm.load_state_dict(learner.critic.norm.state_dict())
                         def physical_snapshot():
@@ -377,6 +408,8 @@ def _main() -> None:
                             "reward": reward[:, None],
                             "collision": physical["collision"],
                         }
+                        if adapter.gait_enabled:
+                            transition["phase"] = current["phase"]
                         event = (done | (physical["collision"].squeeze(-1) > 0)
                                  | ((physical["contacts"] - current["contacts"]).abs().sum(-1) > 0)
                                  | (physical["force"].amax(-1) > 0.35))
@@ -387,6 +420,7 @@ def _main() -> None:
                         useful = (useful | ((ground_change > .005) & valid & aligned)) & ~bad
                         learner.model.update_stats(transition, valid)
                         learner.replay.add(transition, terminated, valid, event, success_event=useful)
+                        gait_metrics.update(physical, done)
                         episode_return += reward
                         if done.any():
                             recent_returns.extend(episode_return[done].cpu().tolist())
@@ -463,6 +497,12 @@ def _main() -> None:
                         name: float(term_means[index].detach())
                         for index, name in enumerate(env.unwrapped.reward_manager.active_terms)
                     }
+                    row["gait_metrics"] = gait_metrics.summary()
+                    if adapter.gait_enabled:
+                        from rp_wd_rl.tasks.locomotion.velocity.mdp.pointfoot_full import update_gait_quality
+                        row["gait_quality_ready"] = update_gait_quality(env.unwrapped, row["gait_metrics"])
+                    row["exploration_std"] = noise_std
+                    gait_metrics.clear_interval()
                     if hasattr(env.unwrapped, "_pointfoot_course_caps"):
                         row["terrain_level_caps"] = env.unwrapped._pointfoot_course_caps.tolist()
                     row["course_trials_by_type_level"] = env.unwrapped._pointfoot_course_counts.tolist()

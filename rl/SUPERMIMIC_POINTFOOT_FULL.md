@@ -1,5 +1,7 @@
 # 点足 SuperMimic 完整任务 v3
 
+2026-11-05：针对用户实测的高频碎步和卡阶，新增独立的[低频完整步态v4](SUPERMIMIC_POINTFOOT_GAIT.md)。本页保留v3旧模型的接口与训练记录，不能把旧模型指定为新任务来获得新步态。
+
 2026-11-04，分支 `codex/pointfoot-supermimic-wm`。本版本解决上一版只有正向上阶、无法完整遥控，以及高度/终止/评测口径不一致的问题。新增任务独立注册为：
 
 `Isaac-Velocity-Rough-RPWD-Pointfoot-SuperMimic-Full-v0`

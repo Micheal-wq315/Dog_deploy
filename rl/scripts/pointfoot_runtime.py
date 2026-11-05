@@ -18,7 +18,7 @@ def resolve_pointfoot_checkpoint(path=None):
             raise FileNotFoundError(candidate)
         return candidate
     roots = [Path("/media/rmer/data/rpwd_training") / name for name in
-             ("pointfoot_supermimic", "pointfoot_supermimic_full")]
+             ("pointfoot_supermimic", "pointfoot_supermimic_full", "pointfoot_supermimic_gait")]
     candidates = [p for root in roots for p in root.glob("*/teacher_latest.pt")]
     if not candidates:
         raise FileNotFoundError("未找到点足正式模型，请用--checkpoint指定文件")
@@ -53,10 +53,15 @@ class PointfootStateAdapter:
         if len(self.foot_body_ids) != 4 or len(self.foot_sensor_ids) != 4:
             raise RuntimeError("ContactSensor 未解析到四个点脚刚体")
         names = [self.robot.joint_names[i] for i in self.leg_ids.cpu().tolist()]
-        self.task_rewards = PointfootTaskRewards(
+        self.gait_enabled = getattr(self.env.cfg, "supermimic_revision", 2) >= 4
+        self.task_rewards = make_task_rewards(
             names, self.robot.data.default_joint_pos[0, self.leg_ids],
             self.robot.data.soft_joint_pos_limits[0, self.leg_ids],
-            profile="full" if getattr(self.env.cfg, "supermimic_revision", 2) >= 3 else "legacy")
+            getattr(self.env.cfg, "supermimic_revision", 2))
+        if self.gait_enabled:
+            scale = torch.as_tensor(action_term._scale, device=self.env.device).reshape(-1, ACTION_DIM)[0]
+            if not torch.allclose(scale, self.task_rewards.gait.scales):
+                raise RuntimeError("v4步态参考的动作缩放与Isaac关节动作不一致")
         self.field = PointfootTerrainField.from_env(self.env)
         self.env._pointfoot_field = self.field
         self.env._pointfoot_task_rewards = self.task_rewards
@@ -75,7 +80,7 @@ class PointfootStateAdapter:
         reference_com = com.new_tensor((-0.0064993, -0.0009295, 0.0021204))
         self.context = torch.cat((friction, com - reference_com), -1)
         print(f"[信息] 本地包={Path(__import__('rp_wd_rl').__file__).resolve()} "
-              f"盲策略={POLICY_DIM}→12 地形缓存={self.field.h.numel()*4/2**20:.1f}MiB", flush=True)
+              f"盲策略={POLICY_DIM + (2 if self.gait_enabled else 0)}→12 地形缓存={self.field.h.numel()*4/2**20:.1f}MiB", flush=True)
 
 
     def capture(self, observations: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -111,6 +116,9 @@ class PointfootStateAdapter:
             foot_force = history[:, :, self.foot_sensor_ids].norm(dim=-1).amax(dim=1)
         foot_force = foot_force.clamp(0.0, 500.0) / 500.0
         contacts = (foot_force > (8.0 / 500.0)).float()
+        if self.gait_enabled:
+            from rp_wd_rl.supermimic.pointfoot_gait import foot_support_mask
+            contacts = foot_support_mask(contact_sensor.data.net_forces_w[:, self.foot_sensor_ids]).float()
         nonfoot_force = history[:, :, self.nonfoot_sensor_ids].norm(dim=-1).amax(dim=(1, 2))
         collision = (nonfoot_force > 10.0).float()[:, None]
         policy_history = observations["policy"].reshape(env.num_envs, -1)
@@ -133,7 +141,45 @@ class PointfootStateAdapter:
             "bias": torch.cat((getattr(env, "_rp_wd_gyro_bias"),
                                getattr(env, "_rp_wd_joint_offset")[:, self.leg_ids]), -1),
         }
+        if self.gait_enabled:
+            from rp_wd_rl.supermimic.pointfoot_gait import env_phase
+            result["phase"] = env_phase(env)
+            result["contacts_current"] = contacts
         return {key: value.clone() for key, value in result.items()}
+
+
+def make_task_rewards(names, default_q, limits, revision):
+    if revision >= 4:
+        from rp_wd_rl.supermimic.pointfoot_gait_rewards import GaitPointfootTaskRewards
+        return GaitPointfootTaskRewards(names, default_q, limits)
+    return PointfootTaskRewards(names, default_q, limits, profile="full" if revision >= 3 else "legacy")
+
+
+def actor_from_checkpoint(checkpoint, device):
+    from rp_wd_rl.supermimic.pointfoot import PointfootActor, GaitPointfootActor
+    if checkpoint.get("gait_enabled", False):
+        from rp_wd_rl.supermimic.pointfoot_gait import gait_parameters
+        saved = checkpoint.get("training_contract", {}).get("gait", {})
+        if any(saved.get(k) != v for k, v in gait_parameters().items()):
+            raise ValueError("checkpoint的步态周期/滤波/限幅与当前v4控制器不匹配，禁止静默改变回放动作")
+        weights = checkpoint["actor"]
+        task = make_task_rewards(checkpoint["training_contract"]["joint_names"],
+                                 weights["reference.default_q"].to(device),
+                                 weights["reference.limits"].to(device), 4)
+        actor = GaitPointfootActor(tuple(checkpoint["actor_hidden"]), task.gait)
+    else:
+        actor = PointfootActor(tuple(checkpoint["actor_hidden"]))
+    actor = actor.to(device).eval()
+    actor.load_state_dict(checkpoint["actor"])
+    return actor
+
+
+def policy_action(actor, history, env):
+    from rp_wd_rl.supermimic.pointfoot import GaitPointfootActor
+    if isinstance(actor, GaitPointfootActor):
+        from rp_wd_rl.supermimic.pointfoot_gait import env_phase
+        return actor(history, env_phase(env.unwrapped))
+    return actor(history)
 
 
 COMMAND_MODE_NAMES = ("stand", "forward", "reverse", "left", "right", "yaw_left", "yaw_right", "combined")
@@ -188,13 +234,15 @@ def command_skills_ready(metrics, minimum_samples=64):
     return True
 
 
-def course_frame_pass(snapshot, origins, kinds, levels):
+def course_frame_pass(snapshot, origins, kinds, levels, step_heights=None):
     """验收复用训练的末级脚底/当前接触/垂向速度判定，避免掠过算通过。"""
     from rp_wd_rl.supermimic.pointfoot_courses import FOOT_RADIUS, stable_course_pass
+    kwargs = {} if step_heights is None else {"step_heights": step_heights}
     return stable_course_pass(
         snapshot["root_pos"] - origins, snapshot["state"][:, 1:4], levels, kinds,
         snapshot["foot_positions"][..., 2] - FOOT_RADIUS - origins[:, 2:3],
         snapshot["contacts_current"].bool(), snapshot["vertical_speed_world"],
+        **kwargs,
     )
 
 

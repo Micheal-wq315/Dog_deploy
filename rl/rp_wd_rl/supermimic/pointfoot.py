@@ -73,16 +73,16 @@ class RunningNorm(nn.Module):
 class PointfootActor(nn.Module):
     """盲策略，只接收 225 维本体历史并输出归一化12关节位置动作。"""
 
-    def __init__(self, hidden: tuple[int, ...] = (256, 128, 64)):
+    def __init__(self, hidden: tuple[int, ...] = (256, 128, 64), input_dim=POLICY_DIM):
         super().__init__()
         layers: list[nn.Module] = []
-        width = POLICY_DIM
+        width = input_dim
         for size in hidden:
             layers.extend((nn.Linear(width, size), nn.ELU()))
             width = size
         layers.append(nn.Linear(width, ACTION_DIM))
         self.net = nn.Sequential(*layers)
-        self.norm = RunningNorm(POLICY_DIM)
+        self.norm = RunningNorm(input_dim)
         self.hidden = tuple(hidden)
         nn.init.uniform_(self.net[-1].weight, -0.01, 0.01)
         nn.init.zeros_(self.net[-1].bias)
@@ -91,12 +91,49 @@ class PointfootActor(nn.Module):
         return self.net(self.norm(history)).tanh()
 
 
+class GaitPointfootActor(PointfootActor):
+    """227维盲策略：低频IK参考＋学习残差，滤波/限速属于策略本身。"""
+
+    def __init__(self, hidden, reference):
+        from .pointfoot_gait import GAIT_POLICY_DIM
+        super().__init__(hidden, input_dim=GAIT_POLICY_DIM)
+        self.reference = copy.deepcopy(reference)
+
+    @staticmethod
+    def features(history, phase):
+        from .pointfoot_gait import phase_features
+        return torch.cat((history, phase_features(phase)), -1)
+
+    def forward(self, history, phase, noise=None):
+        from .pointfoot_gait import GAIT_RESIDUAL, GAIT_ALPHA, next_phase, GAIT_RATE_LIMITS, GAIT_ACCEL_LIMITS
+        # 最新命令在term-major指令历史末帧，上一实际动作在整个历史末尾。
+        command = history[:, 42:45]
+        previous = history[:, -ACTION_DIM:]
+        older = history[:, -2 * ACTION_DIM:-ACTION_DIM]
+        residual = GAIT_RESIDUAL * super().forward(self.features(history, phase))
+        # 动作在下一物理帧生效，参考必须和奖励的下一相位一致。
+        target = self.reference.actions(next_phase(phase), command) + residual
+        if noise is not None:
+            target = target + noise
+        delta = GAIT_ALPHA * (target.clamp(-1, 1) - previous)
+        rates = torch.empty_like(self.reference.scales)
+        rates[self.reference.ids] = rates.new_tensor(GAIT_RATE_LIMITS)
+        bound = .02 * rates / self.reference.scales
+        accelerations = torch.empty_like(rates)
+        accelerations[self.reference.ids] = accelerations.new_tensor(GAIT_ACCEL_LIMITS)
+        acceleration_bound = .02**2 * accelerations / self.reference.scales
+        last_delta = previous - older
+        delta = delta.clamp(last_delta - acceleration_bound, last_delta + acceleration_bound)
+        return (previous + delta.clamp(-bound, bound)).clamp(-1, 1)
+
+
 class PointfootCritic(nn.Module):
     """特权价值函数：机身状态、动作、前视高度图、脚端接触/载荷。"""
 
-    def __init__(self, hidden: tuple[int, ...] = (256, 128, 64)):
+    def __init__(self, hidden: tuple[int, ...] = (256, 128, 64), gait=False):
         super().__init__()
         self.input_dim = STATE_DIM + COMMAND_DIM + CONTEXT_DIM + ACTION_DIM + SCAN_DIM
+        self.input_dim += 2 if gait else 0
         layers: list[nn.Module] = []
         width = self.input_dim
         for size in hidden:
@@ -360,8 +397,12 @@ class PointfootReplay:
         }
 
 
-def _critic_features(state, command, previous, scan, context):
-    return torch.cat((state, command, context, previous, scan), dim=-1)
+def _critic_features(state, command, previous, scan, context, phase=None):
+    values = (state, command, context, previous, scan)
+    if phase is not None:
+        from .pointfoot_gait import phase_features
+        values += (phase_features(phase),)
+    return torch.cat(values, dim=-1)
 
 
 def _push_history(history: torch.Tensor, latest: torch.Tensor) -> torch.Tensor:
@@ -410,9 +451,13 @@ class PointfootSuperMimicLearner:
     def __init__(self, args, device: torch.device, num_envs: int, field, task_rewards):
         self.args, self.device = args, device
         self.field, self.task_rewards = field, task_rewards
+        self.gait_enabled = hasattr(task_rewards, "gait")
         self.model = PointfootDynamics(tuple(args.wm_hidden)).to(device)
-        self.actor = PointfootActor(tuple(args.actor_hidden)).to(device)
-        self.critic = PointfootCritic(tuple(args.critic_hidden)).to(device)
+        if self.gait_enabled:
+            self.actor = GaitPointfootActor(tuple(args.actor_hidden), task_rewards.gait).to(device)
+        else:
+            self.actor = PointfootActor(tuple(args.actor_hidden)).to(device)
+        self.critic = PointfootCritic(tuple(args.critic_hidden), gait=self.gait_enabled).to(device)
         self.target_critic = copy.deepcopy(self.critic).eval()
         self.target_critic.requires_grad_(False)
         self.replay = PointfootReplay(
@@ -421,6 +466,8 @@ class PointfootSuperMimicLearner:
             success_archive_windows=getattr(args, "success_archive_windows", 0),
             wm_window=getattr(args, "wm_window", 8),
         )
+        if self.gait_enabled:
+            self.replay.data["phase"] = torch.zeros(args.buffer_len, num_envs, 1, device=device)
         self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=args.lr)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=args.lr * args.actor_lr_scale)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=args.lr)
@@ -439,6 +486,8 @@ class PointfootSuperMimicLearner:
         state, pose = batch["state"][:, 0], batch["world_pose"][:, 0]
         active = seq[:, 0]
         accum = {key: [] for key in ("state", "pose", "force", "contact", "collision", "terminal")}
+        if self.gait_enabled:
+            accum["feet"] = []
         scale = self.model.output_norm.scale
         for t in range(window):
             active = active & seq[:, t]
@@ -460,6 +509,10 @@ class PointfootSuperMimicLearner:
                 for key, error in errors.items():
                     accum[key].append(error.square().mean() if key != "force" else
                                       F.smooth_l1_loss(error, torch.zeros_like(error)))
+                if self.gait_enabled:
+                    predicted_feet = self.task_rewards.feet(pred["state"][dynamics])
+                    true_feet = self.task_rewards.feet(batch["next_state"][indices, t])
+                    accum["feet"].append(F.smooth_l1_loss(predicted_feet / .03, true_feet / .03))
                 accum["contact"].append(F.binary_cross_entropy_with_logits(
                     pred["contact_logit"][dynamics], batch["next_contacts"][indices, t]))
             for name, logit, target in (("collision", "collision_logit", "collision"),
@@ -477,6 +530,8 @@ class PointfootSuperMimicLearner:
             active = active & valid[:, t] & ~batch["terminated"][:, t, 0].bool()
         coefficients = {"state": 1., "pose": 1., "force": .1, "contact": .1,
                         "collision": 1., "terminal": .2}
+        if self.gait_enabled:
+            coefficients.update(feet=.2, contact=.2)
         if not any(accum.values()):
             return {"wm_loss": 0.0}
         means = {key: torch.stack(value).mean() for key, value in accum.items() if value}
@@ -597,6 +652,7 @@ class PointfootSuperMimicLearner:
     def improve(self) -> dict[str, float]:
         args = self.args
         seed = self.replay.sample_steps(args.imag_batch)
+        phase = seed["phase"].detach() if self.gait_enabled else None
         state = seed["state"].detach()
         history = seed["history"].detach()
         previous = seed["previous"].detach()
@@ -620,9 +676,9 @@ class PointfootSuperMimicLearner:
         with _frozen(self.model):
             for _ in range(args.horizon):
                 critic_inputs.append(_critic_features(
-                    state, command, previous, scan, context
+                    state, command, previous, scan, context, phase
                 ).detach())
-                action = self.actor(history)
+                action = self.actor(history, phase) if self.gait_enabled else self.actor(history)
                 pred = self.model(state, action, previous, context, scan)
                 collision = pred["collision_logit"].sigmoid()
                 contacts = pred["contact_logit"].sigmoid()
@@ -630,10 +686,15 @@ class PointfootSuperMimicLearner:
                 next_state = pred["state"]
                 next_pose = advance_pose(pose, pred["pose_delta"])
                 next_scan = self.field.scan(next_state, next_pose)
+                if self.gait_enabled:
+                    from .pointfoot_gait import next_phase
+                    phase = next_phase(phase)
                 continuation = self._imagined_continuation(pred, next_scan, contacts, force)
+                reward_kwargs = {"phase": phase} if self.gait_enabled else {}
                 reward = (0.02 * self.task_rewards.reward(
                     next_state, action, previous, command, next_scan, collision,
                     1.0 - continuation, contacts=contacts, force=force,
+                    **reward_kwargs,
                 ))[:, None]
                 objective = objective + discount * alive * reward
                 alive = alive * continuation
@@ -652,7 +713,7 @@ class PointfootSuperMimicLearner:
                 history = _push_history(history, frame)
                 discount *= args.gamma
                 next_critic_inputs.append(_critic_features(
-                    state, command, previous, scan, context
+                    state, command, previous, scan, context, phase
                 ))
 
             # 保留完整horizon的回报及末端价值对Actor的梯度。
@@ -745,6 +806,7 @@ class PointfootSuperMimicLearner:
     def state_dict(self, step: int) -> dict:
         return {
             "format": FORMAT,
+            "gait_enabled": self.gait_enabled,
             "step": step,
             "model": self.model.state_dict(),
             "actor": self.actor.state_dict(),

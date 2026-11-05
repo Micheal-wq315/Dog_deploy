@@ -280,9 +280,14 @@ def _pointfoot_reward_measurements(env: ManagerBasedRLEnv):
     names = list(robot.joint_names)[ids] if isinstance(ids, slice) else [robot.joint_names[i] for i in ids]
     task = getattr(env, "_pointfoot_task_rewards", None)
     if task is None:
-        task = PointfootTaskRewards(
-            names, robot.data.default_joint_pos[0, ids], robot.data.soft_joint_pos_limits[0, ids],
-            profile="full" if getattr(env.cfg, "supermimic_revision", 2) >= 3 else "legacy")
+        if getattr(env.cfg, "supermimic_revision", 2) >= 4:
+            from rp_wd_rl.supermimic.pointfoot_gait_rewards import GaitPointfootTaskRewards
+            task = GaitPointfootTaskRewards(names, robot.data.default_joint_pos[0, ids],
+                                            robot.data.soft_joint_pos_limits[0, ids])
+        else:
+            task = PointfootTaskRewards(
+                names, robot.data.default_joint_pos[0, ids], robot.data.soft_joint_pos_limits[0, ids],
+                profile="full" if getattr(env.cfg, "supermimic_revision", 2) >= 3 else "legacy")
         env._pointfoot_task_rewards = task
     data = robot.data
     field = getattr(env, "_pointfoot_field", None)
@@ -311,6 +316,9 @@ def _pointfoot_reward_measurements(env: ManagerBasedRLEnv):
     else:
         foot_force = sensor.data.net_forces_w_history[:, :, foot_ids].norm(dim=-1).amax(dim=1)
     contacts = (foot_force > 8.0).float()
+    if getattr(env.cfg, "supermimic_revision", 2) >= 4:
+        from rp_wd_rl.supermimic.pointfoot_gait import foot_support_mask
+        contacts = foot_support_mask(sensor.data.net_forces_w[:, foot_ids]).float()
     foot_force = foot_force.clamp(0, 500) / 500
     values = task, state, scan, contacts, foot_force, collision
     env._pointfoot_reward_measurements = env.common_step_counter, values
@@ -332,9 +340,13 @@ def pointfoot_model_reward(env: ManagerBasedRLEnv, term: str) -> torch.Tensor:
         if getattr(env.cfg, "supermimic_revision", 2) >= 3:
             from .pointfoot_full import update_full_course_step
             update_full_course_step(env)
+        kwargs = {}
+        if getattr(env.cfg, "supermimic_revision", 2) >= 4:
+            from rp_wd_rl.supermimic.pointfoot_gait import env_phase
+            kwargs["phase"] = env_phase(env)
         terms = task.terms(state, env.action_manager.action, env.action_manager.prev_action,
                            env.command_manager.get_command("base_velocity"), scan, collision,
-                           env.termination_manager.terminated.float(), contacts=contacts, force=force)
+                           env.termination_manager.terminated.float(), contacts=contacts, force=force, **kwargs)
         cached = env.common_step_counter, terms
         env._pointfoot_model_reward_cache = cached
     return cached[1][term]

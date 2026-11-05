@@ -55,6 +55,19 @@
   --num_envs 8
 # 设计、网络维度、保存路径与边界说明：rl/SUPERMIMIC_MODEL_BASED.md
 
+# ★ 点足低频完整步态v4（新训练入口；旧20000轮模型不会自动变成新步态）
+cd /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm
+# 默认1024环境、20000轮、headless；227→12盲Actor，1.25Hz参考＋IK＋学习残差。
+./rl/scripts/train_pointfoot_supermimic_gait.sh
+# v4阶高0..5 = 2/4/6/8/10/12cm；新正式模型训练后再测试。
+./rl/scripts/play_pointfoot_supermimic.sh --checkpoint /绝对路径/teacher_final.pt \
+  --teleop keyboard --terrain up --terrain_level 1 --forward_speed 0.20
+# 固定0.2m/s、三种子、前后方向；记录实际步频/步距/腾空时间与卡住/通过情况。
+./rl/scripts/evaluate_pointfoot_supermimic.sh --checkpoint /绝对路径/teacher_final.pt \
+  --suite terrain --cases up_forward up_reverse --levels 0 1 2 3 \
+  --terrain_speed 0.20 --terrain_seconds 35 --num_envs 8 --seeds 42 43 44
+# 设计、控制限速、课程质量门槛与验证边界见 rl/SUPERMIMIC_POINTFOOT_GAIT.md。
+
 # ★ 点足 SuperMimic 完整任务v3（停止/前后/横移/原地转向＋六类双向地形）
 # 在 /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm 下执行。
 # 默认1024环境/40000轮；高度0.22–0.42m内零惩罚，起伏放宽至0.20–0.44m。

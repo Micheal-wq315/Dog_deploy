@@ -18,10 +18,12 @@ parser.add_argument("--checkpoint", default=None)
 parser.add_argument("--task", default=None, help="省略时使用checkpoint记录的任务")
 parser.add_argument("--num_envs", type=int, default=8)
 parser.add_argument("--suite", choices=["commands", "terrain", "all"], default="all")
+parser.add_argument("--cases", nargs="+", default=None, help="只验收指定场景，例如forward up_forward up_reverse")
 parser.add_argument("--levels", type=int, nargs="+", default=[0, 1, 2], choices=range(6))
 parser.add_argument("--seeds", type=int, nargs="+", default=[42])
 parser.add_argument("--seconds", type=float, default=8.0, help="运动指令验收时长")
-parser.add_argument("--terrain_seconds", type=float, default=20.0)
+parser.add_argument("--terrain_seconds", type=float, default=35.0)
+parser.add_argument("--terrain_speed", type=float, default=.20, help="地形测试前后速度，默认匹配当前低速课程")
 parser.add_argument("--settle_seconds", type=float, default=2.0)
 parser.add_argument("--max_steps", type=int, default=0, help="仅用于工具冒烟，0表示完整验收")
 parser.add_argument("--output", default=None)
@@ -29,6 +31,8 @@ AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 if args.num_envs < 1 or min(args.seconds, args.terrain_seconds) <= 0 or args.settle_seconds < 0 or args.max_steps < 0:
     parser.error("环境数/测量时长必须为正，稳定时间和max_steps不得为负")
+if args.terrain_speed <= 0:
+    parser.error("terrain_speed必须为正数")
 args.headless = True
 simulation_app = AppLauncher(args).app
 
@@ -40,6 +44,7 @@ from rp_wd_rl.supermimic.pointfoot import FORMAT, PointfootActor  # noqa:E402
 from pointfoot_runtime import (  # noqa:E402
     LEGACY_TASK, PointfootStateAdapter, resolve_pointfoot_checkpoint, set_pointfoot_command,
     course_frame_pass, CoursePassTracker,
+    actor_from_checkpoint, policy_action,
 )
 from transition_capture import capture_before_reset  # noqa:E402
 from sim_shutdown import shutdown  # noqa:E402
@@ -64,7 +69,14 @@ def case_list(available):
             for level in args.levels:
                 for direction in ((1, -1) if kind in ("up", "down") else (1,)):
                     result.append((f"{kind}_{'forward' if direction > 0 else 'reverse'}", kind,
-                                   level, (.3 * direction, 0., 0.), args.terrain_seconds))
+                                   level, (getattr(args, "terrain_speed", .3) * direction, 0., 0.),
+                                   args.terrain_seconds))
+    selected = getattr(args, "cases", None)
+    if selected:
+        result = [case for case in result if case[0] in selected]
+        missing = set(selected) - {case[0] for case in result}
+        if missing:
+            raise ValueError(f"当前任务/套件不包含验收场景：{sorted(missing)}")
     return result
 
 
@@ -90,9 +102,10 @@ def main():
     if checkpoint.get("format") != FORMAT:
         raise ValueError("需要225→12点足世界模型策略")
     task = args.task or checkpoint.get("task", LEGACY_TASK)
-    actor = PointfootActor(tuple(checkpoint["actor_hidden"])).to(device).eval()
-    actor.load_state_dict(checkpoint["actor"])
+    actor = actor_from_checkpoint(checkpoint, device)
     cfg = parse_env_cfg(task, device=device, num_envs=args.num_envs)
+    if (getattr(cfg, "supermimic_revision", 2) >= 4) != bool(checkpoint.get("gait_enabled", False)):
+        raise ValueError("模型与任务的步态版本不匹配")
     cfg.seed = int(checkpoint.get("config", {}).get("seed", 42))
     cfg.curriculum = {}
     cfg.observations.policy.enable_corruption = False
@@ -137,6 +150,8 @@ def main():
                 failed = torch.zeros(raw.num_envs, dtype=torch.bool, device=device)
                 ended = torch.zeros_like(failed)
                 tracker = CoursePassTracker(raw.num_envs, device, raw.step_dt)
+                from rp_wd_rl.supermimic.pointfoot_gait import PointfootGaitMetrics
+                gait_metrics = PointfootGaitMetrics(raw.num_envs, device, raw.step_dt)
                 reached, progress = tracker.reached, tracker.progress
                 limit = int((duration + args.settle_seconds) / raw.step_dt)
                 settle = int(args.settle_seconds / raw.step_dt)
@@ -152,7 +167,7 @@ def main():
                                     raw.termination_manager.terminated.clone(),
                                     raw.termination_manager.time_outs.clone())
                         with capture_before_reset(raw.termination_manager, snapshot) as captured:
-                            obs, _, _, _, _ = env.step(actor(policy_input))
+                            obs, _, _, _, _ = env.step(policy_action(actor, policy_input, env))
                         physical, terminated, truncated = captured[0]
                         state = physical["state"]
                         finite = torch.stack([torch.isfinite(physical[k]).flatten(1).all(-1)
@@ -174,12 +189,14 @@ def main():
                         from rp_wd_rl.supermimic.pointfoot_courses import COURSE_KINDS
                         frame_pass = course_frame_pass(
                             physical, origins, torch.full_like(terrain.terrain_levels, COURSE_KINDS.index(kind)),
-                            torch.full_like(terrain.terrain_levels, level))
+                            torch.full_like(terrain.terrain_levels, level),
+                            step_heights=getattr(cfg, "pointfoot_step_heights", None))
                         required = 2.8 if kind in ("up", "down") else 5.4
                         if getattr(cfg, "supermimic_revision", 2) < 3 and kind == "up":
                             required = 3.3
                         tracker.update(distance, frame_pass & (distance > required), active, failed)
                         ended |= terminated | truncated | ~finite
+                        gait_metrics.update(physical, ended)
                     if ended.all():
                         break
                 means = sums / count.clamp_min(1)[:, None]
@@ -198,10 +215,12 @@ def main():
                                  "command": list(command_values), "actual_mean": means[i].tolist(),
                                  "velocity_mae": maes[i].tolist(), "support_clearance_mean": float(height_means[i]),
                                  "max_forward_progress": float(progress[i]), "samples": int(count[i]),
+                                 "gait_case_aggregate": gait_metrics.summary(),
                                  "failed": bool(failed[i]), "reached": bool(reached[i]), "pass": passed})
                 subset = rows[-raw.num_envs:]
                 print(f"[验收] {name} 等级={level} seed={seed} 通过={sum(r['pass'] for r in subset)}/{len(subset)}", flush=True)
         report = {"checkpoint": str(checkpoint_path), "checkpoint_step": checkpoint.get("step"),
+                  "step_heights": list(getattr(cfg, "pointfoot_step_heights", (.02, .04, .08, .12, .16, .20))),
                   "task": task, "evaluation_protocol": 3, "landing_stability_seconds": .12,
                   "deterministic_actor": True, "observation_noise": False,
                   "smoke_only": bool(args.max_steps), "config": vars(args), "trials": rows}

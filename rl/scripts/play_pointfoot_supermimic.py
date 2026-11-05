@@ -19,7 +19,7 @@ parser.add_argument("--auto-reset", action="store_true",
 parser.add_argument("--teleop", choices=["keyboard"], default=None)
 parser.add_argument("--terrain", choices=["mixed", "flat", "stairs", "up", "down", "platform", "slope", "rough", "rubble"], default="mixed")
 parser.add_argument("--terrain_level", type=int, choices=range(6), default=0,
-                    help="固定等级0..5；楼梯对应2/4/8/12/16/20cm")
+                    help="固定等级0..5；v4对应2/4/6/8/10/12cm，旧版2/4/8/12/16/20cm")
 parser.add_argument("--cmd", type=float, nargs=3, default=None, metavar=("VX", "VY", "WZ"))
 parser.add_argument("--forward_speed", type=float, default=None)
 parser.add_argument("--lateral_speed", type=float, default=None)
@@ -42,7 +42,7 @@ import torch  # noqa: E402
 import rp_wd_rl.tasks  # noqa: E402,F401
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg  # noqa: E402
 from rp_wd_rl.supermimic.pointfoot import FORMAT, FRAME_DIMS, HISTORY, PointfootActor  # noqa: E402
-from pointfoot_runtime import LEGACY_TASK, resolve_pointfoot_checkpoint
+from pointfoot_runtime import LEGACY_TASK, resolve_pointfoot_checkpoint, actor_from_checkpoint, policy_action
 from sim_shutdown import shutdown  # noqa: E402
 
 
@@ -89,13 +89,13 @@ def main() -> None:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     if checkpoint.get("format") != FORMAT:
         raise ValueError("需要225维五帧点足SuperMimic v2模型")
-    actor = PointfootActor(tuple(checkpoint["actor_hidden"])).to(device)
-    actor.load_state_dict(checkpoint["actor"])
-    actor.eval()
+    actor = actor_from_checkpoint(checkpoint, device)
 
     task_id = args.task or checkpoint.get("task", LEGACY_TASK)
     cfg = parse_env_cfg(task_id, device=str(device), num_envs=args.num_envs)
     full = getattr(cfg, "supermimic_revision", 2) >= 3
+    if (getattr(cfg, "supermimic_revision", 2) >= 4) != bool(checkpoint.get("gait_enabled", False)):
+        raise ValueError("模型与任务的步态版本不匹配，请使用checkpoint默认任务")
     if full:
         from rp_wd_rl.supermimic.pointfoot_courses import COMMAND_LIMITS
         stage = int(checkpoint.get("terrain_state", {}).get("full", {}).get("command_stage", 0))
@@ -156,6 +156,9 @@ def main() -> None:
         print(f"[回放] checkpoint={checkpoint_path} GUI={not args.headless} "
               f"地形={args.terrain} 等级={args.terrain_level} "
               f"自动复位={'开启' if args.auto_reset else '关闭（仅R手动复位）'}", flush=True)
+        if args.terrain in ("stairs", "up", "down"):
+            heights = getattr(cfg, "pointfoot_step_heights", (.02, .04, .08, .12, .16, .20))
+            print(f"[地形] 单级高度={100 * heights[args.terrain_level]:g}cm", flush=True)
         if keyboard:
             print("[键盘] 先点击仿真视口；W/S前后，A/D横移，E左转、Q右转；空格停止，R复位。按住生效，松开归零。", flush=True)
             print(f"[键盘] vx=±{args.forward_speed}m/s，vy=±{args.lateral_speed}m/s，wz=±{args.yaw_speed}rad/s。", flush=True)
@@ -179,7 +182,7 @@ def main() -> None:
                     term.time_left[:] = 1e9
                     # 只替换最新指令帧，历史仍按真实仿真步推进，避免多append一帧。
                     policy_input[:, command_start:command_start + 3] = command
-                obs, _, terminated, _, _ = env.step(actor(policy_input))
+                obs, _, terminated, _, _ = env.step(policy_action(actor, policy_input, env))
             step += 1
             if step == 1 or step % 100 == 0:
                 robot = env.unwrapped.scene["robot"]
