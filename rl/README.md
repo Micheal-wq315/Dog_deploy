@@ -21,6 +21,9 @@ Isaac Lab转移回放→集成世界模型→想象轨迹梯度优化Actor→DAg
 模型式分支另外提供`rp_wd_rl/supermimic/`与`train_supermimic.py`，不替换主线PPO训练入口；
 学生仍导出与部署相同的Odin `1740→16`接口。
 
+本仓库引用的训练算法、仿真器、导航项目及部署依赖开源链接汇总见
+[OPEN_SOURCE_REFERENCES.md](OPEN_SOURCE_REFERENCES.md)。
+
 ## 目录结构
 
 ```
