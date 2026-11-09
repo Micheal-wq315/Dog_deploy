@@ -342,6 +342,20 @@ ls -t rl/logs/rsl_rl/*/*/model_*.pt | head -1
 
 点足版 SuperMimic 是独立的 135→12 盲策略训练器；目前仅可用配套 GUI 回放，尚未接入 ROS 点足部署节点或 ONNX 契约。
 
+## UW-HIMLoco 原 W1W 的 MuJoCo 测试
+
+使用独立的 MuJoCo 环境和作者348→16模型；不是 RP_wd 点足模型。图形回放会检查训练进程，训练结束后再启动。
+
+```bash
+# 可在任意目录执行，浏览器地址以终端显示为准。
+/home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm/rl/scripts/play_himloco_sim2sim.sh --map stairs
+
+# CPU 无窗口检查，不启动渲染器。
+/home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm/rl/scripts/play_himloco_sim2sim.sh --headless --map flat --vx 0.5 --duration 20
+```
+
+安装位置、模型适用范围和兼容性记录见 `rl/HIMLOCO_SIM2SIM.md`。
+
 ## 7. 相关文档
 
 | 文件 | 内容 |
