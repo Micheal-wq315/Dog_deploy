@@ -55,6 +55,18 @@
   --num_envs 8
 # 设计、网络维度、保存路径与边界说明：rl/SUPERMIMIC_MODEL_BASED.md
 
+# ★ 原版Go2W开源对照（MuJoCo Warp，保留原v7奖励/课程；和RP_wd模型分开）
+cd /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm
+# 4096环境、20000轮；完成后自动保存本机模型的平地/4/8/12cm上下阶录像。
+./rl/scripts/run_go2w_reference_experiment.sh
+# 当前实验日志，只读，不启动仿真。
+tail -f /media/rmer/data/rpwd_training/go2w_supermimic/train_v7_20k_20261109.log
+# 没有训练/其它仿真实例时，浏览器展示作者自带20000轮模型。
+./rl/scripts/play_go2w_reference.sh
+# 测本机模型时必须显式指定其checkpoint。
+./rl/scripts/play_go2w_reference.sh --checkpoint /绝对路径/model_20000.pt
+# 详细环境/显存预检/作者录像及本机实验记录见 rl/GO2W_REFERENCE.md。
+
 # ★ 点足低频完整步态v4（新训练入口；旧20000轮模型不会自动变成新步态）
 cd /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm
 # 默认1024环境、20000轮、headless；227→12盲Actor，1.25Hz参考＋IK＋学习残差。
