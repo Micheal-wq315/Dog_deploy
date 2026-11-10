@@ -67,6 +67,11 @@ tail -f /media/rmer/data/rpwd_training/go2w_supermimic/train_v7_20k_20261109.log
 ./rl/scripts/play_go2w_reference.sh --checkpoint /绝对路径/model_20000.pt
 # 详细环境/显存预检/作者录像及本机实验记录见 rl/GO2W_REFERENCE.md。
 
+# ★ 官方原生MuJoCo + 最新本机Go2W模型 + 三维测试场（CPU物理和推理）
+# 按住方向键移动、Q/E转向，松开归零；Space停止，R复位，1..8换赛道，Esc退出。
+./rl/scripts/play_go2w_mujoco.sh --lane stairs8 --speed 0.3 --turn-speed 0.5
+# 详细地图、评测和导出命令见 rl/GO2W_NATIVE_TEST_PARK.md。
+
 # 2026-11-10：用户明确总目标为60000轮，当前从最新20500轮检查点继续。
 # 原data分区只读，本次输出在可写的 /media/rmer/系统；完整恢复命令见 rl/GO2W_REFERENCE.md。
 systemctl --user status go2w-supermimic-v7-resume60k-20261110.service

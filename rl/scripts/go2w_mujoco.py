@@ -1,0 +1,405 @@
+"""本机 Go2W checkpoint 的原生 MuJoCo 查看器、三维地图导出及 CPU 能力评测。"""
+from __future__ import annotations
+
+import argparse
+import csv
+from dataclasses import fields
+from datetime import datetime
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import queue
+import shutil
+import time
+import xml.etree.ElementTree as ET
+from zoneinfo import ZoneInfo
+
+import mujoco
+import numpy as np
+import torch
+
+from go2w_test_maps import LANES, PROFILES, add_test_park, terrain_height
+
+BASE = Path("/media/rmer/系统/rpwd_training/go2w_supermimic")
+
+
+def latest_checkpoint():
+    candidates = []
+    for base in (BASE, Path("/media/rmer/data/rpwd_training/go2w_supermimic")):
+        for run in base.glob("*原版Go2W*"):
+            candidates.extend(run.glob("model_*.pt"))
+    if not candidates:
+        raise FileNotFoundError("没有找到本机训练的 Go2W 检查点，请指定 --checkpoint")
+    return max(candidates, key=lambda p: (int(p.stem.split("_")[-1]), p.stat().st_mtime_ns))
+
+
+def dump_json(path, value):
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+class HeldKeyboard:
+    """查询当前窗口的实际按键状态，松键或失焦立即返回零速度。"""
+    def __init__(self, speed, lateral, turn):
+        from Xlib import display, XK
+        self.display = display.Display()
+        self.root = self.display.screen().root
+        self.active_atom = self.display.intern_atom("_NET_ACTIVE_WINDOW")
+        self.pid_atom = self.display.intern_atom("_NET_WM_PID")
+        self.codes = {n: self.display.keysym_to_keycode(XK.string_to_keysym(n))
+                      for n in ("Up", "Down", "Left", "Right", "q", "e", "space")}
+        self.speed, self.lateral, self.turn = speed, lateral, turn
+
+    def command(self):
+        from Xlib import X, error
+        try:
+            active = self.root.get_full_property(self.active_atom, X.AnyPropertyType)
+            if active is None or not len(active.value) or not active.value[0]:
+                return np.zeros(3)
+            window = self.display.create_resource_object("window", int(active.value[0]))
+            pid = window.get_full_property(self.pid_atom, X.AnyPropertyType)
+            if pid is None or int(pid.value[0]) != os.getpid():
+                return np.zeros(3)
+            bits = self.display.query_keymap()
+        except (error.XError, OSError):
+            return np.zeros(3)
+        held = {n for n, c in self.codes.items() if bits[c // 8] & (1 << (c % 8))}
+        if "space" in held:
+            return np.zeros(3)
+        x = int("Up" in held) - int("Down" in held)
+        y = int("Left" in held) - int("Right" in held)
+        divisor = max(1., math.hypot(x, y))
+        return np.array([self.speed * x / divisor, self.lateral * y / divisor,
+                         self.turn * (int("q" in held) - int("e" in held))])
+
+    def close(self):
+        self.display.close()
+
+
+class NativeGo2W:
+    """复用上游实体/执行器配置，直接使用原生 mj_step，无 Warp GPU 仿真实例。"""
+    def __init__(self, checkpoint, actor, seed=0, profile="standard"):
+        from mjlab.scene import Scene
+        from go2w_supermimic.core.policy import evaluation_env_cfg, checkpoint_wheel_vel
+        from go2w_supermimic.robot.config import LEG_JOINT_NAMES, WHEEL_JOINT_NAMES
+        if checkpoint_wheel_vel(checkpoint) or checkpoint["config"].get("terrain_revision") != 7:
+            raise ValueError("当前原生适配器只接受 v7 的245维无轮速Actor")
+        self.checkpoint, self.actor, self.seed = checkpoint, actor, seed
+        self.cfg = evaluation_env_cfg(checkpoint, 0, "flat")
+        self.cfg.scene.num_envs = 1
+        self.cfg.scene.terrain, self.cfg.scene.sensors = None, ()
+        self.cfg.scene.spec_fn = None
+        self.scene = Scene(self.cfg.scene, device="cpu")
+        self.map = add_test_park(self.scene.spec, seed, profile)
+        self.model = self.scene.compile()
+        self.cfg.sim.mujoco.apply(self.model)
+        # 把实际求解器参数同步到可导出的 MJCF，而非只修改内存中的模型。
+        for field in fields(self.cfg.sim.mujoco):
+            value = getattr(self.model.opt, field.name)
+            if isinstance(value, np.ndarray):
+                getattr(self.scene.spec.option, field.name)[:] = value
+            else:
+                setattr(self.scene.spec.option, field.name, value)
+        self.data = mujoco.MjData(self.model)
+        self.names = LEG_JOINT_NAMES + WHEEL_JOINT_NAMES
+        self.joints = [self.model.joint("robot/" + name).id for name in self.names]
+        self.qadr = self.model.jnt_qposadr[self.joints]
+        self.vadr = self.model.jnt_dofadr[self.joints]
+        self.actuators = []
+        for joint in self.joints:
+            found = np.where(self.model.actuator_trnid[:, 0] == joint)[0]
+            if len(found) != 1:
+                raise ValueError("每个Go2W关节必须对应唯一原生执行器")
+            self.actuators.append(int(found[0]))
+        self.base = self.model.body("robot/base_link").id
+        self.home = self.model.key("init_state").qpos.copy()
+        self.default = self.home[self.qadr].copy()
+        self.order = checkpoint["env_action_order"]
+        if sorted(self.order) != list(range(16)) or self.model.nu != 16:
+            raise ValueError("动作映射不是16维排列")
+        self.dt = self.model.opt.timestep * self.cfg.decimation
+        if abs(self.dt - checkpoint["dt"]) > 1e-9:
+            raise ValueError("原生模型与策略控制周期不一致")
+        scale = self.cfg.actions["joint_pos"].scale
+        import re
+        self.scales = np.array([next(v for pattern, v in scale.items() if re.fullmatch(pattern, n))
+                                for n in self.names[:12]])
+        self.wheel_scale = self.cfg.actions["wheel_vel"].scale
+        self.robot_geom = np.array([self.model.geom(i).name.startswith("robot/")
+                                   for i in range(self.model.ngeom)])
+        self.ground_geom = np.array([self.model.geom(i).name.startswith("test_")
+                                    for i in range(self.model.ngeom)])
+        self.wheel_geom = {self.model.geom(f"robot/{leg}_wheel_collision").id: i
+                           for i, leg in enumerate(("FL", "FR", "RL", "RR"))}
+        self.reset("stairs8")
+
+    def reset(self, lane, seed=0):
+        self.lane = next(x for x in self.map["lanes"] if x["name"] == lane)
+        mujoco.mj_resetData(self.model, self.data)
+        self.data.qpos[:] = self.home
+        self.data.qpos[:3] = self.lane["spawn"]
+        if seed:
+            rng = np.random.default_rng(seed)
+            self.data.qpos[:2] += rng.uniform(-.03, .03, 2)
+            yaw = rng.uniform(-.025, .025)
+            self.data.qpos[3:7] = (math.cos(yaw / 2), 0, 0, math.sin(yaw / 2))
+        self.previous = np.zeros(16, dtype=np.float32)
+        self.history = None
+        self.data.ctrl[self.actuators[:12]] = self.default[:12]
+        self.data.ctrl[self.actuators[12:]] = 0.
+        self.peak_nonwheel, self.contacts = 0., np.zeros(4, dtype=bool)
+        mujoco.mj_forward(self.model, self.data)
+
+    def state(self):
+        r = self.data.xmat[self.base].reshape(3, 3)
+        # 自由关节前三维速度在世界系，角速度在根刚体系。
+        return np.concatenate(([self.data.qpos[2]], r.T @ np.array([0., 0., -1.]),
+                               r.T @ self.data.qvel[:3], self.data.qvel[3:6],
+                               self.data.qpos[self.qadr[:12]] - self.default[:12],
+                               self.data.qvel[self.vadr[:12]], self.data.qvel[self.vadr[12:]])).astype(np.float32)
+
+    def observation(self, command):
+        from go2w_supermimic.core.policy import frame, push_history, TERMS
+        s = torch.from_numpy(self.state()[None])
+        # 上游Actor输出用规范关节顺序；last_action观测使用原环境动作顺序。
+        latest = frame(s, torch.from_numpy(self.previous[self.order][None]),
+                       torch.as_tensor(np.asarray(command, dtype=np.float32)[None]), torch.zeros(1, 12), False)
+        if self.history is None:
+            self.history = torch.cat([v.repeat(1, self.checkpoint["history"])
+                                      for v in latest.split(TERMS, dim=-1)], dim=-1)
+        else:
+            self.history = push_history(self.history, latest, self.checkpoint["history"])
+        if self.history.shape != (1, 245) or not torch.isfinite(self.history).all():
+            raise RuntimeError("原生策略观测无效")
+        return self.history
+
+    def _contact_state(self):
+        force_by_body = {}
+        wheels = np.zeros(4, dtype=bool)
+        for i in range(self.data.ncon):
+            c = self.data.contact[i]
+            g0, g1 = c.geom
+            if self.robot_geom[g0] and self.ground_geom[g1]:
+                robot, sign = g0, -1
+            elif self.robot_geom[g1] and self.ground_geom[g0]:
+                robot, sign = g1, 1
+            else:
+                continue
+            force = np.zeros(6)
+            mujoco.mj_contactForce(self.model, self.data, i, force)
+            if robot in self.wheel_geom:
+                wheels[self.wheel_geom[robot]] |= np.linalg.norm(force[:3]) > 1.
+            else:
+                body = self.model.geom_bodyid[robot]
+                world = sign * c.frame.reshape(3, 3).T @ force[:3]
+                force_by_body[body] = force_by_body.get(body, np.zeros(3)) + world
+        peak = max((np.linalg.norm(v) for v in force_by_body.values()), default=0.)
+        return peak, wheels
+
+    @torch.inference_mode()
+    def step(self, command):
+        action = self.actor(self.observation(command))[0].numpy()
+        if not np.isfinite(action).all():
+            raise RuntimeError("策略动作出现非有限值")
+        self.data.ctrl[self.actuators[:12]] = self.default[:12] + action[:12] * self.scales
+        self.data.ctrl[self.actuators[12:]] = np.clip(action[12:] * self.wheel_scale, -35., 35.)
+        self.peak_nonwheel = 0.
+        for _ in range(self.cfg.decimation):
+            mujoco.mj_step(self.model, self.data)
+            peak, self.contacts = self._contact_state()
+            self.peak_nonwheel = max(self.peak_nonwheel, peak)
+        mujoco.mj_forward(self.model, self.data)
+        self.previous = action.copy()
+        return self.measure(command)
+
+    def measure(self, command=(0., 0., 0.)):
+        s = self.state()
+        x, y, z = self.data.qpos[:3]
+        finite = bool(np.isfinite(self.data.qpos).all() and np.isfinite(self.data.qvel).all())
+        clearance = float("nan")
+        if finite:
+            try:
+                clearance = float(z - terrain_height(self.model, self.data, x, y))
+            except RuntimeError:
+                finite = False
+        return dict(t=float(self.data.time), x=float(x), y=float(y), z=float(z),
+                    vx=float(s[4]), vy=float(s[5]), wz=float(s[9]),
+                    tilt_degrees=math.degrees(math.acos(float(np.clip(-s[3], -1., 1.)))),
+                    clearance=clearance,
+                    wheel_contacts=int(self.contacts.sum()), nonwheel_force=float(self.peak_nonwheel),
+                    finite=finite, cmd_vx=command[0], cmd_vy=command[1], cmd_wz=command[2])
+
+    def export(self, output):
+        from go2w_supermimic.robot.config import GO2W_XML
+        self.scene.spec.key("init_state").qpos = self.data.qpos.copy()
+        self.scene.write(output)
+        # 上游从磁盘加载的网格不一定进入 MjSpec.assets；补齐导出XML引用的原始资产。
+        for mesh in ET.parse(output / "scene.xml").getroot().iter("mesh"):
+            if mesh.get("file"):
+                target = output / "assets" / mesh.get("file")
+                if not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(GO2W_XML.parent / "assets" / Path(mesh.get("file")).name, target)
+        shutil.copyfile(GO2W_XML.parent.parent / "LICENSE_menagerie_go2", output / "LICENSE_menagerie_go2")
+        dump_json(output / "map.json", self.map)
+        # 确认导出资产完整，独立加载时也能获得相同机器人与物理步长。
+        check = mujoco.MjModel.from_xml_path(str(output / "scene.xml"))
+        if check.nu != 16 or abs(check.opt.timestep - self.model.opt.timestep) > 1e-12:
+            raise RuntimeError("导出MJCF与运行模型不一致")
+
+
+def evaluate(args, checkpoint, actor, report):
+    for seed in args.seeds:
+        sim = NativeGo2W(checkpoint, actor, seed, args.profile)
+        if seed == args.seeds[0]:
+            sim.export(args.output / "scene")
+        for lane in args.lanes:
+            sim.reset(lane, seed)
+            rows, stable, reason, success = [], 0., "timeout", False
+            command = (args.speed, 0., 0.)
+            for i in range(round((args.seconds + 2.) / sim.dt)):
+                active = i * sim.dt >= 2.
+                row = sim.step(command if active else (0., 0., 0.))
+                if active:
+                    rows.append(row)
+                if not row["finite"] or row["tilt_degrees"] > 60:
+                    reason = "fallen_or_nonfinite"
+                    break
+                if row["nonwheel_force"] > 10.:
+                    reason = "nonwheel_collision"
+                    break
+                if abs(row["y"] - sim.lane["center_y"]) > sim.lane["half_width"]:
+                    reason = "left_lane"
+                    break
+                reached = (row["x"] >= sim.lane["goal_x"] and row["tilt_degrees"] < 25
+                           and row["wheel_contacts"] >= 2 and .15 < row["clearance"] < .70
+                           and abs(sim.state()[6]) < .35)
+                stable = stable + sim.dt if reached else 0.
+                if stable >= .20 - 1e-9:
+                    success, reason = True, "completed"
+                    break
+                if len(rows) > round(8. / sim.dt) and row["x"] - rows[-round(8. / sim.dt)]["x"] < .12:
+                    reason = "stuck_8s"
+                    break
+            path = args.output / f"{lane}_seed{seed}.csv"
+            if rows:
+                with path.open("w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+                    writer.writeheader()
+                    writer.writerows(rows)
+            v = np.array([[r["vx"], r["vy"], r["wz"]] for r in rows] or [[0., 0., 0.]])
+            result = dict(lane=lane, seed=seed, success=success, reason=reason,
+                          manual_navigation=sim.lane["manual_navigation"],
+                          specification=sim.lane, measured_seconds=len(rows) * sim.dt,
+                          actual_mean=v.mean(0).tolist(), velocity_mae=np.abs(v - command).mean(0).tolist(),
+                          max_x=max((r["x"] for r in rows), default=float(sim.data.qpos[0])),
+                          max_tilt=max((r["tilt_degrees"] for r in rows), default=0.),
+                          peak_nonwheel_force=max((r["nonwheel_force"] for r in rows), default=0.), csv=str(path))
+            report["trials"].append(result)
+            dump_json(args.output / "summary.json", report)
+            print("[能力测试] " + json.dumps(result, ensure_ascii=False), flush=True)
+
+
+def play(sim, args):
+    import mujoco.viewer
+    commands = np.zeros(3)
+    events = queue.SimpleQueue()
+    keyboard = HeldKeyboard(args.speed, args.lateral_speed, args.turn_speed)
+    sim.reset(args.lane)
+    with mujoco.viewer.launch_passive(sim.model, sim.data, key_callback=events.put) as viewer:
+        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        viewer.cam.trackbodyid = sim.base
+        viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 2.8, 135, -25
+        print(f"[就绪] 官方MuJoCo查看器，模型第{sim.checkpoint['step']}轮，场景{args.lane}", flush=True)
+        print("按住方向键前后/横移，Q/E转向，松开归零；Space停止；R复位；1..8切赛道；K暂停；Esc退出", flush=True)
+        paused = False
+        while viewer.is_running():
+            began = time.monotonic()
+            while not events.empty():
+                key = events.get()
+                if key in (256,):
+                    return
+                if key == 32:
+                    commands[:] = 0.
+                elif key == ord("R"):
+                    commands[:] = 0.
+                    sim.reset(sim.lane["name"])
+                    paused = False
+                elif ord("1") <= key <= ord("8"):
+                    commands[:] = 0.
+                    sim.reset(LANES[key - ord("1")])
+                    paused = False
+                    # 数字键也是原生查看器的组可见性快捷键，切赛道后保留地形和机器人可见。
+                    viewer.opt.geomgroup[0] = viewer.opt.geomgroup[2] = viewer.opt.geomgroup[4] = True
+                    viewer.opt.geomgroup[3] = False
+                elif key == ord("K"):
+                    paused = not paused
+            commands[:] = keyboard.command() if not paused else 0.
+            row = sim.measure(commands) if paused else sim.step(commands)
+            if not row["finite"]:
+                commands[:] = 0.
+                paused = True
+            viewer.set_texts((mujoco.mjtFontScale.mjFONTSCALE_100, mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                             f"Go2W {sim.checkpoint['step']} | {sim.lane['name']} | CPU native\n"
+                             "Hold Arrows: vx/vy | Q/E: yaw | Release: stop\nSpace stop  R reset\n"
+                             "1 Flat  2 Stairs4  3 Stairs8  4 Stairs12\n"
+                             "5 Ramp  6 Rubble  7 Mixed  8 Slalom\nK pause  Esc exit\n"
+                             f"cmd {commands.round(2)} | vx {row['vx']:.2f} | tilt {row['tilt_degrees']:.1f}\n"
+                             f"support {row['wheel_contacts']} | nonwheel {row['nonwheel_force']:.1f}N"
+                             + (" | PAUSED" if paused else ""), ""))
+            viewer.sync()
+            time.sleep(max(0., sim.dt - (time.monotonic() - began)))
+    keyboard.close()
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--mode", choices=("play", "evaluate", "generate"), default="play")
+    p.add_argument("--checkpoint", type=Path)
+    p.add_argument("--profile", choices=PROFILES, default="standard")
+    p.add_argument("--lane", choices=LANES, default="stairs8")
+    p.add_argument("--lanes", nargs="+", choices=LANES, default=list(LANES[:-1]))
+    p.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
+    p.add_argument("--seconds", type=float, default=45.)
+    p.add_argument("--speed", type=float, default=.3)
+    p.add_argument("--lateral-speed", type=float, default=.2)
+    p.add_argument("--turn-speed", type=float, default=.5)
+    p.add_argument("--output", type=Path)
+    args = p.parse_args()
+    if not math.isfinite(args.seconds) or args.seconds <= 0 or not 0 < args.speed <= .6:
+        p.error("测试时长必须为正数，前进速度必须在(0,0.6]内")
+    if not 0 < args.lateral_speed <= .4 or not 0 < args.turn_speed <= 1.:
+        p.error("横移速度须在(0,0.4]，角速度须在(0,1]内")
+    torch.set_num_threads(1)
+    args.checkpoint = (args.checkpoint or latest_checkpoint()).resolve()
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    from go2w_supermimic.core.policy import load_actor
+    actor = load_actor(ckpt, "cpu")
+    metadata = {k: ckpt[k] for k in ("format", "step", "config", "history", "dt", "env_action_order")}
+    metadata["actor_wheel_vel"] = False
+    del ckpt
+    if args.output is None:
+        stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d_%H-%M-%S")
+        args.output = BASE / "native_tests" / f"{stamp}_{args.mode}_{metadata['step']}"
+    args.output.mkdir(parents=True, exist_ok=False)
+    report = dict(checkpoint=str(args.checkpoint), checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
+                  model_step=metadata["step"], engine="MuJoCo native CPU", mujoco_version=mujoco.__version__,
+                  actor_observation=245, actor_action=16, policy_dt=metadata["dt"], observation_noise=False,
+                  profile=args.profile, source=os.environ["GO2W_SOURCE"],
+                  speed=args.speed, seconds=args.seconds, seeds=args.seeds, trials=[])
+    dump_json(args.output / "run.json", report)
+    print(f"[模型] {args.checkpoint}\n[输出] {args.output}", flush=True)
+    if args.mode == "evaluate":
+        evaluate(args, metadata, actor, report)
+    else:
+        sim = NativeGo2W(metadata, actor, args.seeds[0], args.profile)
+        sim.reset(args.lane)
+        sim.export(args.output / "scene")
+        if args.mode == "play":
+            play(sim, args)
+    print(f"[完成] {args.output}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

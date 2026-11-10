@@ -24,6 +24,9 @@ Isaac Lab转移回放→集成世界模型→想象轨迹梯度优化Actor→DAg
 本仓库引用的训练算法、仿真器、导航项目及部署依赖开源链接汇总见
 [OPEN_SOURCE_REFERENCES.md](OPEN_SOURCE_REFERENCES.md)。
 
+原版Go2W的官方MuJoCo键盘控制、三维测试地图和CPU能力评测见
+[GO2W_NATIVE_TEST_PARK.md](GO2W_NATIVE_TEST_PARK.md)。
+
 ## 目录结构
 
 ```
