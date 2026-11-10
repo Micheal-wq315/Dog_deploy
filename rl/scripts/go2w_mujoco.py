@@ -6,6 +6,7 @@ import csv
 from dataclasses import fields
 from datetime import datetime
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -81,8 +82,12 @@ class NativeGo2W:
     """复用上游实体/执行器配置，直接使用原生 mj_step，无 Warp GPU 仿真实例。"""
     def __init__(self, checkpoint, actor, seed=0, profile="standard"):
         from mjlab.scene import Scene
-        from go2w_supermimic.core.policy import evaluation_env_cfg, checkpoint_wheel_vel
-        from go2w_supermimic.robot.config import LEG_JOINT_NAMES, WHEEL_JOINT_NAMES
+        self.package = checkpoint.get('backend_package') or ('rpwd_go2w_supermimic' if checkpoint['format'].startswith('rpwd-go2w-') else 'go2w_supermimic')
+        self.policy = importlib.import_module(self.package + '.core.policy')
+        robot_config = importlib.import_module(self.package + '.robot.config')
+        evaluation_env_cfg, checkpoint_wheel_vel = self.policy.evaluation_env_cfg, self.policy.checkpoint_wheel_vel
+        LEG_JOINT_NAMES, WHEEL_JOINT_NAMES = robot_config.LEG_JOINT_NAMES, robot_config.WHEEL_JOINT_NAMES
+        self.robot_id = checkpoint.get('robot_id', 'go2w')
         if checkpoint_wheel_vel(checkpoint) or checkpoint["config"].get("terrain_revision") != 7:
             raise ValueError("当前原生适配器只接受 v7 的245维无轮速Actor")
         self.checkpoint, self.actor, self.seed = checkpoint, actor, seed
@@ -160,7 +165,7 @@ class NativeGo2W:
                                self.data.qvel[self.vadr[:12]], self.data.qvel[self.vadr[12:]])).astype(np.float32)
 
     def observation(self, command):
-        from go2w_supermimic.core.policy import frame, push_history, TERMS
+        frame, push_history, TERMS = self.policy.frame, self.policy.push_history, self.policy.TERMS
         s = torch.from_numpy(self.state()[None])
         # 上游Actor输出用规范关节顺序；last_action观测使用原环境动作顺序。
         latest = frame(s, torch.from_numpy(self.previous[self.order][None]),
@@ -170,7 +175,7 @@ class NativeGo2W:
                                       for v in latest.split(TERMS, dim=-1)], dim=-1)
         else:
             self.history = push_history(self.history, latest, self.checkpoint["history"])
-        if self.history.shape != (1, 245) or not torch.isfinite(self.history).all():
+        if self.history.shape != (1, 49 * self.checkpoint["history"]) or not torch.isfinite(self.history).all():
             raise RuntimeError("原生策略观测无效")
         return self.history
 
@@ -231,7 +236,9 @@ class NativeGo2W:
                     finite=finite, cmd_vx=command[0], cmd_vy=command[1], cmd_wz=command[2])
 
     def export(self, output):
-        from go2w_supermimic.robot.config import GO2W_XML
+        config = importlib.import_module(self.package + '.robot.config')
+        source_xml = config.RPWD_XML if self.robot_id == 'rpwd' else config.GO2W_XML
+        source_assets = source_xml.parent / ('meshes' if self.robot_id == 'rpwd' else 'assets')
         self.scene.spec.key("init_state").qpos = self.data.qpos.copy()
         self.scene.write(output)
         # 上游从磁盘加载的网格不一定进入 MjSpec.assets；补齐导出XML引用的原始资产。
@@ -240,8 +247,10 @@ class NativeGo2W:
                 target = output / "assets" / mesh.get("file")
                 if not target.exists():
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(GO2W_XML.parent / "assets" / Path(mesh.get("file")).name, target)
-        shutil.copyfile(GO2W_XML.parent.parent / "LICENSE_menagerie_go2", output / "LICENSE_menagerie_go2")
+                    shutil.copyfile(source_assets / Path(mesh.get("file")).name, target)
+        license_file = source_xml.parent.parent / 'LICENSE_menagerie_go2'
+        if license_file.exists():
+            shutil.copyfile(license_file, output / 'LICENSE_menagerie_go2')
         dump_json(output / "map.json", self.map)
         # 确认导出资产完整，独立加载时也能获得相同机器人与物理步长。
         check = mujoco.MjModel.from_xml_path(str(output / "scene.xml"))
@@ -341,7 +350,7 @@ def play(sim, args):
                 commands[:] = 0.
                 paused = True
             viewer.set_texts((mujoco.mjtFontScale.mjFONTSCALE_100, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                             f"Go2W {sim.checkpoint['step']} | {sim.lane['name']} | CPU native\n"
+                             f"{sim.robot_id.upper()} {sim.checkpoint['step']} | {sim.lane['name']} | CPU native\n"
                              "Hold Arrows: vx/vy | Q/E: yaw | Release: stop\nSpace stop  R reset\n"
                              "1 Flat  2 Stairs4  3 Stairs8  4 Stairs12\n"
                              "5 Ramp  6 Rubble  7 Mixed  8 Slalom\nK pause  Esc exit\n"
@@ -353,7 +362,7 @@ def play(sim, args):
     keyboard.close()
 
 
-def main():
+def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_backend=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", choices=("play", "evaluate", "generate"), default="play")
     p.add_argument("--checkpoint", type=Path)
@@ -372,21 +381,26 @@ def main():
     if not 0 < args.lateral_speed <= .4 or not 0 < args.turn_speed <= 1.:
         p.error("横移速度须在(0,0.4]，角速度须在(0,1]内")
     torch.set_num_threads(1)
-    args.checkpoint = (args.checkpoint or latest_checkpoint()).resolve()
+    args.checkpoint = (args.checkpoint or (checkpoint_finder or latest_checkpoint)()).resolve()
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    from go2w_supermimic.core.policy import load_actor
-    actor = load_actor(ckpt, "cpu")
+    if expected_robot is not None and ckpt.get('robot_id', 'go2w') != expected_robot:
+        raise ValueError('检查点机器人与请求不匹配')
+    package = policy_backend or ('rpwd_go2w_supermimic' if ckpt['format'].startswith('rpwd-go2w-') else 'go2w_supermimic')
+    actor = importlib.import_module(package + '.core.policy').load_actor(ckpt, 'cpu')
     metadata = {k: ckpt[k] for k in ("format", "step", "config", "history", "dt", "env_action_order")}
     metadata["actor_wheel_vel"] = False
+    metadata["backend_package"] = package
+    for name in ('robot_id', 'robot_signature'):
+        if name in ckpt: metadata[name] = ckpt[name]
     del ckpt
     if args.output is None:
         stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d_%H-%M-%S")
-        args.output = BASE / "native_tests" / f"{stamp}_{args.mode}_{metadata['step']}"
+        args.output = (output_base or BASE) / "native_tests" / f"{stamp}_{args.mode}_{metadata['step']}"
     args.output.mkdir(parents=True, exist_ok=False)
     report = dict(checkpoint=str(args.checkpoint), checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
                   model_step=metadata["step"], engine="MuJoCo native CPU", mujoco_version=mujoco.__version__,
-                  actor_observation=245, actor_action=16, policy_dt=metadata["dt"], observation_noise=False,
-                  profile=args.profile, source=os.environ["GO2W_SOURCE"],
+                  actor_observation=49 * metadata["history"], actor_action=16, policy_dt=metadata["dt"], observation_noise=False,
+                  profile=args.profile, source=os.environ.get("GO2W_SOURCE", package), robot_id=metadata.get("robot_id", "go2w"),
                   speed=args.speed, seconds=args.seconds, seeds=args.seeds, trials=[])
     dump_json(args.output / "run.json", report)
     print(f"[模型] {args.checkpoint}\n[输出] {args.output}", flush=True)

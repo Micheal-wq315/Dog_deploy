@@ -373,3 +373,17 @@ ls -t rl/logs/rsl_rl/*/*/model_*.pt | head -1
 | `rl/README.md` | sim2real 契约表、域随机化范围、调参提示、已知待办 |
 | `rl/rp_wd_rl/assets/rp_wd_contract.py` | 契约常量（唯一真相源） |
 | `README.md`（仓库根） | 部署端（ROS2 推理节点）构建与运行 |
+
+
+## 轮足大狗迁移到Go2W SuperMimic（独立分支）
+
+```bash
+cd /media/rmer/系统/rpwd_training/worktrees/rpwd-go2w-supermimic
+# 默认RP_wd轮足，4096环境、60000轮；完整实验含CPU评测和ONNX导出。
+./rl/scripts/run_rpwd_go2w_experiment.sh --robot rpwd
+# 相同算法和修正版课程的Go2W对照入口。
+./rl/scripts/run_rpwd_go2w_experiment.sh --robot go2w
+# 载入对应机器人最新正式模型，方向键移动、Q/E转向，松开归零。
+./rl/scripts/play_rpwd_go2w.sh --robot rpwd
+# 详细物理参数、晋级窗口、验证与部署边界：rl/RPWD_GO2W_MIGRATION.md
+```

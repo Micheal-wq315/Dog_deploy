@@ -1,0 +1,3 @@
+# 第三方机器人网格按原始字节保留，代码审阅不展开大块网格文本。
+assets/*.obj binary
+assets/*.stl binary

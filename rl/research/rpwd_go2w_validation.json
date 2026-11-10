@@ -1,0 +1,127 @@
+{
+  "date": "2026-11-10",
+  "branch": "codex/rpwd-go2w-supermimic",
+  "upstream_commit": "a299ed5f5571da4492b8a286d94acfe4a86128e1",
+  "dependencies": {
+    "torch": "2.11.0+cu128",
+    "mjlab": "1.6.0",
+    "mujoco": "3.11.0",
+    "mujoco-warp": "3.11.0",
+    "warp-lang": "1.19.0",
+    "onnx": "1.21.0",
+    "onnxruntime": "1.26.0"
+  },
+  "unit_tests": 16,
+  "legacy_deployment_static_contract": "PASS --no-sim",
+  "cpu_rpwd": {
+    "step": 48,
+    "policy_updates": 40,
+    "skipped_updates": 0,
+    "invalid_env_resets": 0,
+    "elapsed_s": 15.429431353999462,
+    "promotion_window": {
+      "stage": 0,
+      "target_height_cm": 4,
+      "trials": 0,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "required_trials": 128,
+      "required_pass_rate": 0.6,
+      "probe_envs": 1
+    }
+  },
+  "cpu_rpwd_resume": {
+    "step": 64,
+    "policy_updates": 52,
+    "skipped_updates": 0,
+    "invalid_env_resets": 0,
+    "elapsed_s": 4.78947127200081,
+    "promotion_window": {
+      "stage": 0,
+      "target_height_cm": 4,
+      "trials": 0,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "required_trials": 128,
+      "required_pass_rate": 0.6,
+      "probe_envs": 1
+    }
+  },
+  "cpu_go2w": {
+    "step": 16,
+    "policy_updates": 8,
+    "skipped_updates": 0,
+    "invalid_env_resets": 0,
+    "elapsed_s": 4.775762835999558,
+    "promotion_window": {
+      "stage": 0,
+      "target_height_cm": 4,
+      "trials": 0,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "required_trials": 128,
+      "required_pass_rate": 0.6,
+      "probe_envs": 1
+    }
+  },
+  "gpu_rpwd": {
+    "step": 305,
+    "policy_updates": 5,
+    "skipped_updates": 0,
+    "invalid_env_resets": 0,
+    "elapsed_s": 105.87430376000157,
+    "promotion_window": {
+      "stage": 0,
+      "target_height_cm": 4,
+      "trials": 13,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "required_trials": 128,
+      "required_pass_rate": 0.6,
+      "probe_envs": 287
+    }
+  },
+  "gpu_rpwd_resume": {
+    "step": 317,
+    "policy_updates": 9,
+    "skipped_updates": 0,
+    "invalid_env_resets": 0,
+    "elapsed_s": 5.551468601999659,
+    "promotion_window": {
+      "stage": 0,
+      "target_height_cm": 4,
+      "trials": 13,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "required_trials": 128,
+      "required_pass_rate": 0.6,
+      "probe_envs": 287
+    }
+  },
+  "gpu_memory_sampling": {
+    "pid": 285875,
+    "gpu_peak_mib": 14452,
+    "process_peak_mib": 13410,
+    "samples": 17
+  },
+  "onnx": {
+    "robot_id": "rpwd",
+    "robot_signature": "8e6007e127811b5a1a03f3b628288b2574fe4099f202b107e60c311b51d3c604",
+    "source_checkpoint": "/media/rmer/系统/rpwd_training/rpwd_go2w_supermimic/validation/rpwd_gpu4096_resume_v1/model_317.pt",
+    "step": 317,
+    "input": 245,
+    "output": 16,
+    "history": "term-major oldest-to-newest",
+    "last_action": "canonical pre-scale; ONNX内部重排至训练环境顺序",
+    "onnx_max_abs_error": 5.960464477539063e-08,
+    "policy_dt": 0.02,
+    "hardware_activation": "尚未执行真机部署"
+  },
+  "legacy_go2w_native_success": true,
+  "artifacts_root": "/media/rmer/系统/rpwd_training/rpwd_go2w_supermimic",
+  "notes": [
+    "原版模型完整导入到go2w分支时Actor逐项相等",
+    "RP_wd尚未进行长期收敛训练",
+    "未启动实机电机或覆盖旧部署profile"
+  ]
+}

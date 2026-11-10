@@ -13,4 +13,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [tool.setuptools.packages.find]
-include = ["rp_wd_rl*"]
+include = ["rp_wd_rl*", "rpwd_go2w_supermimic*"]
+
+[tool.setuptools.package-data]
+rpwd_go2w_supermimic = ["LICENSE", "UPSTREAM.json", "robot/LICENSE_menagerie_go2", "robot/model/*.xml", "robot/model/README.md", "robot/model/assets/*", "core/gui.html"]

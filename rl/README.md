@@ -27,6 +27,9 @@ Isaac Lab转移回放→集成世界模型→想象轨迹梯度优化Actor→DAg
 原版Go2W的官方MuJoCo键盘控制、三维测试地图和CPU能力评测见
 [GO2W_NATIVE_TEST_PARK.md](GO2W_NATIVE_TEST_PARK.md)。
 
+轮足大狗与Go2W共用SuperMimic算法、修正版晋级课程和独立部署导出见
+[RPWD_GO2W_MIGRATION.md](RPWD_GO2W_MIGRATION.md)。
+
 ## 目录结构
 
 ```
