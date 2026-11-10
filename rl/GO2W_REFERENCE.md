@@ -71,6 +71,8 @@ systemctl --user stop go2w-supermimic-v7-20k-20261109.service
 
 ## 2026-11-10：从20000轮续训到40000轮
 
+该40000轮目标已被用户随后明确的60000轮目标替代，以下保留为历史启动记录；当前服务与命令见下一节。
+
 本机首轮20000轮已完成，训练耗时7203.6秒、19700次策略更新、跳过0次。自动评测在seed0、无观测噪声、vx=0.3m/s、18秒条件下完成平地及4/8/12cm上下阶七个场景，均无摔倒或非轮碰撞，六个楼梯场景到达末端。这是单种子低速结果，尚未验证多种子或16/20cm台阶。
 
 本次使用原运行的`model_20000.pt`完整续训，总目标40000轮，即额外20000轮。恢复Actor、世界模型、Critic/目标Critic、优化器、地形等级和课程统计；保持seed0、4096环境、2048模型批量、4096想象批量、32步展开及原学习率调度。回放池不包含在checkpoint内，每次恢复先采集300轮，之后恢复策略更新。
@@ -97,4 +99,23 @@ GO2W_RUN=/media/rmer/系统/rpwd_training/go2w_supermimic/2026-11-10_原版Go2W_
 # 查看当前后台服务和日志。
 systemctl --user status go2w-supermimic-v7-resume40k-20261110.service
 tail -f /media/rmer/系统/rpwd_training/go2w_supermimic/train_v7_resume40k_20261110.log
+```
+
+## 2026-11-10：当前总目标调整为60000轮
+
+用户明确要求总计60000轮。已停止40000轮目标服务，从该运行最新保存的`model_20500.pt`完整恢复到新运行；停止前日志约20650轮，未保存的进度不纳入恢复。网络、优化器、课程及原有学习率调度继续沿用，只增加训练总目标。恢复后按原实现重新采集300轮回放，再恢复策略更新。
+
+- 当前服务：`go2w-supermimic-v7-resume60k-20261110.service`。
+- 当前输出：`/media/rmer/系统/rpwd_training/go2w_supermimic/2026-11-10_原版Go2W_v7_续训60k_seed0/`。
+- 当前日志：`/media/rmer/系统/rpwd_training/go2w_supermimic/train_v7_resume60k_20261110.log`。
+- 缓存仍使用`/media/rmer/系统/rpwd_training/go2w_supermimic/cache/`；训练结束后自动评测并保存录像。
+
+```bash
+# 仅在当前服务已停止且没有其他仿真进程时执行。
+cd /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm
+GO2W_CACHE=/media/rmer/系统/rpwd_training/go2w_supermimic/cache \
+GO2W_RUN=/media/rmer/系统/rpwd_training/go2w_supermimic/2026-11-10_原版Go2W_v7_续训60k_seed0 \
+./rl/scripts/run_go2w_reference_experiment.sh \
+  --resume /media/rmer/系统/rpwd_training/go2w_supermimic/2026-11-10_原版Go2W_v7_续训40k_seed0/model_20500.pt \
+  --iterations 60000
 ```
