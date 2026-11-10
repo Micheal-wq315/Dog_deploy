@@ -67,6 +67,11 @@ tail -f /media/rmer/data/rpwd_training/go2w_supermimic/train_v7_20k_20261109.log
 ./rl/scripts/play_go2w_reference.sh --checkpoint /绝对路径/model_20000.pt
 # 详细环境/显存预检/作者录像及本机实验记录见 rl/GO2W_REFERENCE.md。
 
+# 2026-11-10：当前从本机20000轮模型续训到总计40000轮，额外训练20000轮。
+# 原data分区只读，本次输出在可写的 /media/rmer/系统；完整恢复命令见 rl/GO2W_REFERENCE.md。
+systemctl --user status go2w-supermimic-v7-resume40k-20261110.service
+tail -f /media/rmer/系统/rpwd_training/go2w_supermimic/train_v7_resume40k_20261110.log
+
 # ★ 点足低频完整步态v4（新训练入口；旧20000轮模型不会自动变成新步态）
 cd /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm
 # 默认1024环境、20000轮、headless；227→12盲Actor，1.25Hz参考＋IK＋学习残差。

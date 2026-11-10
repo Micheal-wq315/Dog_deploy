@@ -68,3 +68,33 @@ systemctl --user stop go2w-supermimic-v7-20k-20261109.service
 ```
 
 新模型效果以训练结束后的独立测试为准；作者预训练录像不会被标注成本机训练结果。
+
+## 2026-11-10：从20000轮续训到40000轮
+
+本机首轮20000轮已完成，训练耗时7203.6秒、19700次策略更新、跳过0次。自动评测在seed0、无观测噪声、vx=0.3m/s、18秒条件下完成平地及4/8/12cm上下阶七个场景，均无摔倒或非轮碰撞，六个楼梯场景到达末端。这是单种子低速结果，尚未验证多种子或16/20cm台阶。
+
+本次使用原运行的`model_20000.pt`完整续训，总目标40000轮，即额外20000轮。恢复Actor、世界模型、Critic/目标Critic、优化器、地形等级和课程统计；保持seed0、4096环境、2048模型批量、4096想象批量、32步展开及原学习率调度。回放池不包含在checkpoint内，每次恢复先采集300轮，之后恢复策略更新。
+
+重启后原`/media/rmer/data`因NTFS未正常关闭而只读挂载。用户尝试重新挂载后仍为只读，并授权继续训练，因此本次新模型、日志和缓存保存到另一块已通过写入检查的分区`/media/rmer/系统`（`/dev/sdb1`）；源码、Python环境和原检查点从原盘读取。该磁盘挂载状态只描述本次启动条件，后续启动应先检查。
+
+- 服务：`go2w-supermimic-v7-resume40k-20261110.service`。
+- 输出：`/media/rmer/系统/rpwd_training/go2w_supermimic/2026-11-10_原版Go2W_v7_续训40k_seed0/`。
+- 日志：`/media/rmer/系统/rpwd_training/go2w_supermimic/train_v7_resume40k_20261110.log`。
+- 缓存：`/media/rmer/系统/rpwd_training/go2w_supermimic/cache/`。
+- 中途应用户要求停止过一次，停止前最新记录20250轮、尚未新增checkpoint；重新启动仍从原20000轮模型恢复。日志会保留两段启动记录，计算本次速度应使用后一次恢复后的指标。
+- 训练每500轮保存，完成后自动串行执行平地及4/8/12cm上下阶录像评测，保存到新运行目录`evaluation/`。
+- 启动验证至20350轮：完成300轮回放预热，策略更新从19700增至19750，跳过0次、无效环境恢复2次；显存13982MiB，后台服务持续运行。此记录只证明续训更新链路正常。
+
+```bash
+# 没有其他仿真进程时手动启动同一续训；后台服务运行期间不要重复执行。
+cd /home/rmer/Dog_deploy-main/Dog_deploy-main-pointfoot-wm
+GO2W_CACHE=/media/rmer/系统/rpwd_training/go2w_supermimic/cache \
+GO2W_RUN=/media/rmer/系统/rpwd_training/go2w_supermimic/2026-11-10_原版Go2W_v7_续训40k_seed0 \
+./rl/scripts/run_go2w_reference_experiment.sh \
+  --resume /media/rmer/data/rpwd_training/go2w_supermimic/2026-11-09_原版Go2W_v7_20k_seed0/model_20000.pt \
+  --iterations 40000
+
+# 查看当前后台服务和日志。
+systemctl --user status go2w-supermimic-v7-resume40k-20261110.service
+tail -f /media/rmer/系统/rpwd_training/go2w_supermimic/train_v7_resume40k_20261110.log
+```
