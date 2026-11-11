@@ -94,3 +94,22 @@ cd /media/rmer/系统/rpwd_training/worktrees/rpwd-pointfoot-mjlab
 - 完整训练后生成 `acceptance.json`，基础门槛为平地、4cm和8cm各至少3种子全部完成、前向速度误差≤0.08m/s、最大倾角≤35度；12cm和复杂地形另行报告。
 
 机器可读记录：[pointfoot_mjlab_validation.json](research/pointfoot_mjlab_validation.json)。
+
+
+## 正式训练启动记录
+
+2026-11-11从零启动60000轮，训练代码提交 `9b0ef2f`，启动清单记录 `git_dirty=false`。
+
+- 服务：`rpwd-pointfoot-mjlab-60k-20261111.service`。
+- 输出：`/media/rmer/系统/rpwd_training/pointfoot_mjlab/2026-11-11_大狗点足版_60k_seed0/`。
+- 默认4096环境、2048模型批量/16步、2048想象批量/48步，普通Torch完整反传；前300轮为世界模型预热。
+- 每500轮保存模型，第500轮后可用键盘入口自动选取正式模型；每5000轮进行CPU独立检查。
+
+```bash
+# 在本机用户终端查看实时日志。
+journalctl --user -u rpwd-pointfoot-mjlab-60k-20261111.service -f
+# 查看服务状态。
+systemctl --user status rpwd-pointfoot-mjlab-60k-20261111.service
+```
+
+此记录表示训练已启动，不表示60000轮已结束或已通过上阶验收。
