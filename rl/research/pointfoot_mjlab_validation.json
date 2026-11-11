@@ -1,0 +1,141 @@
+{
+  "cpu": {
+    "step": 64,
+    "elapsed_s": 12.447337024999797,
+    "policy_updates": 56,
+    "skipped_updates": 0,
+    "invalid_env_resets": 0,
+    "imagination_backend": "eager",
+    "cuda_peak_allocated_mib": null,
+    "gait": {
+      "cycles": 23.0,
+      "frequency_hz": 1.6242950130081975,
+      "stride_m": 0.08629019396460574,
+      "air_time_s": 0.20782608182533926
+    },
+    "promotion_window": {
+      "stage": 0,
+      "target_height_cm": 4,
+      "trials": 0,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "required_trials": 128,
+      "required_pass_rate": 0.6,
+      "probe_envs": 1
+    }
+  },
+  "gpu": {
+    "step": 400,
+    "elapsed_s": 276.9343647200003,
+    "policy_updates": 100,
+    "skipped_updates": 0,
+    "invalid_env_resets": 0,
+    "imagination_backend": "eager",
+    "cuda_peak_allocated_mib": null,
+    "gait": {
+      "cycles": 21961.0,
+      "frequency_hz": 1.696573249405705,
+      "stride_m": 0.07752115596953454,
+      "air_time_s": 0.18333044035187956
+    },
+    "promotion_window": {
+      "stage": 0,
+      "target_height_cm": 4,
+      "trials": 63,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "required_trials": 128,
+      "required_pass_rate": 0.6,
+      "probe_envs": 287
+    }
+  },
+  "gpu_resume": {
+    "step": 440,
+    "elapsed_s": 35.548911174999375,
+    "policy_updates": 124,
+    "skipped_updates": 0,
+    "invalid_env_resets": 0,
+    "imagination_backend": "eager",
+    "cuda_peak_allocated_mib": 7312.9873046875,
+    "gait": {
+      "cycles": 4307.0,
+      "frequency_hz": 1.9578701554022713,
+      "stride_m": 0.07991838599125968,
+      "air_time_s": 0.1963779811712991
+    },
+    "promotion_window": {
+      "stage": 0,
+      "target_height_cm": 4,
+      "trials": 63,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "required_trials": 128,
+      "required_pass_rate": 0.6,
+      "probe_envs": 287
+    }
+  },
+  "onnx": {
+    "display_name": "大狗点足版",
+    "robot_id": "rpwd_pointfoot",
+    "robot_signature": "e9ed0fbbca23dc84bd2554f9f2599afd65b0951e7fd7c931f391b7887ba92c6e",
+    "step": 440,
+    "input": 235,
+    "output": 12,
+    "terms": [
+      3,
+      3,
+      12,
+      12,
+      12,
+      3,
+      2
+    ],
+    "history": 5,
+    "history_order": "各项分别旧→新，首帧复制",
+    "last_action": "规范关节顺序，实际限速后动作",
+    "clock": "sin/cos，1.5Hz，每20ms推进",
+    "action_scales": [
+      0.25,
+      0.6,
+      0.8,
+      0.25,
+      0.6,
+      0.8,
+      0.25,
+      0.6,
+      0.8,
+      0.25,
+      0.6,
+      0.8
+    ],
+    "default_q": [
+      0.0,
+      0.72,
+      -1.41,
+      0.0,
+      0.72,
+      -1.41,
+      0.0,
+      0.72,
+      -1.41,
+      0.0,
+      0.72,
+      -1.41
+    ],
+    "kp": 100.0,
+    "kd": 3.0,
+    "effort": 42.0,
+    "onnx_max_abs_error": 4.470348358154297e-07,
+    "hardware_activation": "未进行真机部署"
+  },
+  "date": "2026-11-11",
+  "branch": "codex/rpwd-pointfoot-mjlab",
+  "regression_tests": 30,
+  "legacy_deployment_contract": "PASS --no-sim",
+  "evidence_root": "/media/rmer/系统/rpwd_training/pointfoot_mjlab/validation",
+  "notes": [
+    "短测不代表已学会上阶",
+    "CUDA融合反传异常，正式默认普通Torch完整BPTT",
+    "与轮足及旧Isaac点足并存"
+  ]
+}

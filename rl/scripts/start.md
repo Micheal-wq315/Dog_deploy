@@ -387,3 +387,18 @@ cd /media/rmer/系统/rpwd_training/worktrees/rpwd-go2w-supermimic
 ./rl/scripts/play_rpwd_go2w.sh --robot rpwd
 # 详细物理参数、晋级窗口、验证与部署边界：rl/RPWD_GO2W_MIGRATION.md
 ```
+
+
+## 大狗点足版：MuJoCo SuperMimic 上台阶（2026-11-11）
+
+```bash
+cd /media/rmer/系统/rpwd_training/worktrees/rpwd-pointfoot-mjlab
+# 4096环境、60000轮，结束自动评测和导出。
+./rl/scripts/run_pointfoot_mjlab_experiment.sh
+# 最新正式点足模型，方向键平移、Q/E转向，松键归零。
+./rl/scripts/play_pointfoot_mjlab.sh --lane stairs4 --speed .2
+# 完整恢复新点足检查点；总目标60000轮。
+./rl/scripts/train_pointfoot_mjlab.sh --resume /绝对路径/model_20000.pt --iterations 60000
+```
+
+新点足235→12接口，不能加载旧Isaac点足或轮足模型。配置、课程、验收和稳定反传说明见 `rl/RPWD_POINTFOOT_MJLAB.md`。

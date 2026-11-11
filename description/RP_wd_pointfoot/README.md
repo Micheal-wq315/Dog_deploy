@@ -18,4 +18,4 @@ Go2 的 calf、calf_mirror 和 foot 网格取自本机 `genesis-world` 仓库随
 check_urdf description/RP_wd_pointfoot/urdf/RP_wd_pointfoot.urdf
 ```
 
-现有 16 维轮足策略、部署 YAML 与硬件执行器不适用于本模型。点足版尚未接入训练配置；Isaac Sim 中的导入查看也不等于动力学或步态验收。
+现有 16 维轮足策略、部署 YAML 与硬件执行器不适用于本模型。2026-11-11新增独立MuJoCo SuperMimic点足训练，详见 `rl/RPWD_POINTFOOT_MJLAB.md`；旧Isaac点足任务保留。导入查看不等于动力学或步态验收。

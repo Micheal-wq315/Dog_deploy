@@ -1,0 +1,9 @@
+{
+  "base_commit": "0d9676b9948d410d8b3ad5e2f901c4192173f374",
+  "upstream": "https://github.com/uwvwko-zzz/go2w-supermimic",
+  "upstream_commit": "a299ed5f5571da4492b8a286d94acfe4a86128e1",
+  "local_gait_source": "rl/rp_wd_rl/supermimic/pointfoot_gait.py",
+  "robot_source": "description/RP_wd_pointfoot/urdf/RP_wd_pointfoot.urdf",
+  "namespace": "rpwd_pointfoot_supermimic",
+  "notes": "沿用模型式算法；点足资产、时钟、控制、奖励、课程和235→12接口独立适配。"
+}
