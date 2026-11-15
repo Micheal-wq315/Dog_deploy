@@ -28,13 +28,13 @@ WHEEL_JOINT_NAMES = ()
 
 # 0.18m 站高（脚端接触点相对 base_link），由 contact-point IK 求得；膝角约 0.51rad。
 DEFAULT_Q = (
-    -0.01227221, -0.17743997, 0.50644177,   # FL
-    0.01227224, 0.17743997, -0.50644176,    # FR
-    0.01227221, 0.17743998, -0.50644182,    # RL
-    -0.01227224, -0.17743997, 0.5064418,    # RR
+    -0.01332915, -0.06737828, 0.3292402,    # FL
+    0.01332927, 0.06737828, -0.32924008,    # FR
+    0.01332927, 0.06737831, -0.3292402,     # RL
+    -0.01332927, -0.06737834, 0.3292402,    # RR
 )
-STAND_HEIGHT = .18
-INIT_HEIGHT = .189          # 默认站姿下脚网格最低点刚好触地
+STAND_HEIGHT = .16
+INIT_HEIGHT = .1692         # 默认站姿下脚网格最低点刚好触地（-0.16823 + 1mm）
 FOOT_RADIUS = .0084         # 接触点与实际网格最低点的竖向差
 
 # KFE 局部坐标系下的固定足跟接触点（额定站姿下由网格最低接触区质心确定）。
@@ -96,8 +96,8 @@ def profile(robot='rpwd_digdog'):
         self_collisions=False,
         source_sha256=hashlib.sha256(DIGDOG_URDF.read_bytes() + DIGDOG_XML.read_bytes()).hexdigest(),
         adapter_version=1,
-        gait_frequency=1.25, gait_duty=.6, gait_clearance=.05, residual_scale=.6,
-        collision_force=15., height_band_flat=[.17, .22], height_band_rough=[.15, .24],
+        gait_frequency=1.25, gait_duty=.6, gait_clearance=.06, residual_scale=.6,
+        collision_force=15., height_band_flat=[.14, .20], height_band_rough=[.12, .22],
         action_scale=[.5] * 12, rate_limits=[6., 8., 10.] * 4,
     )
 
@@ -149,7 +149,7 @@ def rp_kinematic_constants(device='cpu'):
         limits=torch.tensor(np.asarray(limits), dtype=torch.float32, device=device).reshape(12, 2),
         default_q=torch.tensor(DEFAULT_Q, dtype=torch.float32, device=device),
         signs=torch.tensor(np.asarray(signs), dtype=torch.float32, device=device),
-        height_band_flat=torch.tensor([.17, .22], device=device),
-        height_band_rough=torch.tensor([.15, .24], device=device),
-        clearance=.05,
+        height_band_flat=torch.tensor([.14, .20], device=device),
+        height_band_rough=torch.tensor([.12, .22], device=device),
+        clearance=.06,
     )

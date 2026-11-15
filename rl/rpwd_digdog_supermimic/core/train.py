@@ -490,7 +490,7 @@ def main():
                                   recent_counts(env).cpu().numpy(), velocity_ema, args.promotion_min_trials, args.promotion_pass_rate)
             row['promotion_window'] = promotion_report(env, command_stage)
             row['gait']=gait_metrics.summary()
-            if row['gait']['cycles']<64 or not .8<=row['gait']['frequency_hz']<=2.5 or not .08<=row['gait']['air_time_s']<=.6 or row['gait']['stride_m']<.04:
+            if row['gait']['cycles']<64 or not .9<=row['gait']['frequency_hz']<=1.9 or not .08<=row['gait']['air_time_s']<=.6 or row['gait']['stride_m']<.04:
               promoted=command_stage
             row['next_command_stage'] = promoted
             gait_metrics.clear_interval()

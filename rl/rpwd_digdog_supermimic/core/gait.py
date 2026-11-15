@@ -6,7 +6,7 @@ from torch import nn
 
 GAIT_FREQUENCY = 1.25
 GAIT_DUTY = .60
-GAIT_CLEARANCE = .05
+GAIT_CLEARANCE = .06
 
 
 class PointfootGaitReference(nn.Module):

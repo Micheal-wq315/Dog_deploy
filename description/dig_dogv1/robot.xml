@@ -93,7 +93,7 @@
     <mesh name="mesh_85_part_047_solid_047" file="part_047_solid_047.stl" scale="0.001 0.001 0.001" />
   </asset>
   <worldbody>
-    <body name="base_link" pos="0 0 0.195">
+    <body name="base_link" pos="0 0 0.1692">
       <freejoint name="root_freejoint" />
       <body name="body_link" pos="0 0 0" quat="0.5 0.5 0.5 0.5">
         <site name="imu" size="0.005" rgba="0 0 0 0" />
@@ -119,7 +119,7 @@
         <geom name="base_link_collision_8" type="mesh" mesh="mesh_8_part_009_solid_009" pos="0 0.073111961 -0.158" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
         <geom name="base_link_collision_9" type="mesh" mesh="mesh_9_part_010_solid_010" pos="0 0.073111961 -0.158" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
         <body name="FR_hip" pos="-0.05 0.073111961 0.1472">
-          <joint name="FR_hip_joint" type="hinge" axis="0 0 1" range="-0.52359878 0.52359878" limited="true" damping="0" />
+          <joint name="FR_hip_joint" type="hinge" axis="0 0 1" range="-0.52359878 0.52359878" limited="true" damping="0" armature="0.01" />
           <inertial pos="-0.000774289 -0.000017265 0.069760063" quat="1 0 0 0" mass="0.18869451" diaginertia="0.000231859 0.000175692 0.000084872" />
           <geom name="FR_hip_visual_0" type="mesh" mesh="mesh_10_part_049_solid_049" pos="0.05 0 -0.3052" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
           <geom name="FR_hip_visual_1" type="mesh" mesh="mesh_11_part_050_solid_050" pos="0.05 0 -0.3052" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -138,7 +138,7 @@
           <geom name="FR_hip_collision_6" type="mesh" mesh="mesh_16_part_053_solid_053" pos="0.05 0 -0.3052" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
           <geom name="FR_hip_collision_7" type="mesh" mesh="mesh_17_part_055_solid_055" pos="0.05 0 -0.3052" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
           <body name="FR_thigh" pos="0.0115 0 0.081880804" quat="0.500000013 -0.5 -0.499999987 0.5">
-            <joint name="FR_thigh_joint" type="hinge" axis="0 0 1" range="-1.0471976 1.57" limited="true" damping="0" />
+            <joint name="FR_thigh_joint" type="hinge" axis="0 0 1" range="-1.0471976 1.57" limited="true" damping="0" armature="0.01" />
             <inertial pos="-0.01588918 0.046318041 0.079148584" quat="1 0 0 0" mass="0.37335993" diaginertia="0.001279609 0.000391418 0.001532273" />
             <geom name="FR_thigh_visual_0" type="mesh" mesh="mesh_18_part_064_solid_064" pos="0 0.3870808 -0.0385" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
             <geom name="FR_thigh_visual_1" type="mesh" mesh="mesh_19_part_059_solid_059" pos="0 0.3870808 -0.0385" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -156,7 +156,7 @@
             <geom name="FR_thigh_collision_6" type="mesh" mesh="mesh_24_part_061_solid_061" pos="0 0.3870808 -0.0385" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
             <body name="FR_foot_link" pos="-0.073465942 0.15330608 0.1021">
               <site name="stackforce_foot_0" pos="0 0 -0.01499999649516251" size="0.005" rgba="0 0 0 0" />
-              <joint name="FR_calf_joint" type="hinge" axis="0 0 1" range="-0.6981317 0.64577182" limited="true" damping="0" />
+              <joint name="FR_calf_joint" type="hinge" axis="0 0 1" range="-0.6981317 0.64577182" limited="true" damping="0" armature="0.01" />
               <inertial pos="-0.040227403 -0.045943208 -0.007497634" quat="1 0 0 0" mass="0.11638335" diaginertia="0.000258603 0.000260318 0.000514545" />
               <geom name="FR_foot_visual_0" type="mesh" mesh="mesh_25_part_062_solid_062" pos="0.073465942 0.23377472 -0.1406" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
               <geom name="FR_foot_visual_1" type="mesh" mesh="mesh_26_part_065_solid_065" pos="0.073465942 0.23377472 -0.1406" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -170,7 +170,7 @@
           </body>
         </body>
         <body name="FL_hip" pos="0.05 0.073111961 0.152">
-          <joint name="FL_hip_joint" type="hinge" axis="0 0 1" range="-0.52359878 0.52359878" limited="true" damping="0" />
+          <joint name="FL_hip_joint" type="hinge" axis="0 0 1" range="-0.52359878 0.52359878" limited="true" damping="0" armature="0.01" />
           <inertial pos="0.000774291 -0.000017265 0.064960258" quat="1 0 0 0" mass="0.18869395" diaginertia="0.000231857 0.000175689 0.000084872" />
           <geom name="FL_hip_visual_0" type="mesh" mesh="mesh_29_part_068_solid_068" pos="-0.05 0 -0.31" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
           <geom name="FL_hip_visual_1" type="mesh" mesh="mesh_30_part_069_solid_069" pos="-0.05 0 -0.31" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -189,7 +189,7 @@
           <geom name="FL_hip_collision_6" type="mesh" mesh="mesh_35_part_071_solid_071" pos="-0.05 0 -0.31" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
           <geom name="FL_hip_collision_7" type="mesh" mesh="mesh_36_part_073_solid_073" pos="-0.05 0 -0.31" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
           <body name="FL_thigh" pos="0.0115 0 0.077080804" quat="0.500000013 0.5 0.499999987 0.5">
-            <joint name="FL_thigh_joint" type="hinge" axis="0 0 1" range="-1.57 1.0471976" limited="true" damping="0" />
+            <joint name="FL_thigh_joint" type="hinge" axis="0 0 1" range="-1.57 1.0471976" limited="true" damping="0" armature="0.01" />
             <inertial pos="-0.015882688 -0.046307638 0.056143155" quat="1 0 0 0" mass="0.37347701" diaginertia="0.001279866 0.000391566 0.00153261" />
             <geom name="FL_thigh_visual_0" type="mesh" mesh="mesh_37_part_075_solid_075" pos="0 -0.3870808 -0.0615" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
             <geom name="FL_thigh_visual_1" type="mesh" mesh="mesh_38_part_079_solid_079" pos="0 -0.3870808 -0.0615" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -207,7 +207,7 @@
             <geom name="FL_thigh_collision_6" type="mesh" mesh="mesh_43_part_080_solid_080" pos="0 -0.3870808 -0.0615" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
             <body name="FL_foot_link" pos="-0.073465942 -0.15330608 0.0445">
               <site name="stackforce_foot_1" pos="0 0 0.019600003504837496" size="0.005" rgba="0 0 0 0" />
-              <joint name="FL_calf_joint" type="hinge" axis="0 0 1" range="-0.6981317 0.64577182" limited="true" damping="0" />
+              <joint name="FL_calf_joint" type="hinge" axis="0 0 1" range="-0.6981317 0.64577182" limited="true" damping="0" armature="0.01" />
               <inertial pos="-0.040227403 0.045943208 0.027102366" quat="1 0 0 0" mass="0.11638335" diaginertia="0.000258603 0.000260318 0.000514545" />
               <geom name="FL_foot_visual_0" type="mesh" mesh="mesh_44_part_081_solid_081" pos="0.073465942 -0.23377472 -0.106" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
               <geom name="FL_foot_visual_1" type="mesh" mesh="mesh_45_part_084_solid_084" pos="0.073465942 -0.23377472 -0.106" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -221,7 +221,7 @@
           </body>
         </body>
         <body name="RR_hip" pos="-0.05 0.073111961 -0.158" quat="-2.3e-8 1 0 0">
-          <joint name="RR_hip_joint" type="hinge" axis="0 0 1" range="-0.52359878 0.52359878" limited="true" damping="0" />
+          <joint name="RR_hip_joint" type="hinge" axis="0 0 1" range="-0.52359878 0.52359878" limited="true" damping="0" armature="0.01" />
           <inertial pos="-0.00087504 0.000117229 0.058768104" quat="1 0 0 0" mass="0.18895112" diaginertia="0.000238372 0.000182221 0.00008767" />
           <geom name="RR_hip_visual_0" type="mesh" mesh="mesh_48_part_011_solid_011" pos="0.05 0 0" quat="-2.3e-8 -1 0 0" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
           <geom name="RR_hip_visual_1" type="mesh" mesh="mesh_49_part_012_solid_012" pos="0.05 0 0" quat="-2.3e-8 -1 0 0" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -242,7 +242,7 @@
           <geom name="RR_hip_collision_7" type="mesh" mesh="mesh_55_part_014_solid_014" pos="0.05 0 0" quat="-2.3e-8 -1 0 0" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
           <geom name="RR_hip_collision_8" type="mesh" mesh="mesh_56_part_016_solid_016" pos="0.05 0 0" quat="-2.3e-8 -1 0 0" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
           <body name="RR_thigh" pos="-0.0115 0 0.071080804" quat="0.500000013 0.5 -0.499999987 -0.5">
-            <joint name="RR_thigh_joint" type="hinge" axis="0 0 1" range="-1.5707963 1.0471976" limited="true" damping="0" />
+            <joint name="RR_thigh_joint" type="hinge" axis="0 0 1" range="-1.5707963 1.0471976" limited="true" damping="0" armature="0.01" />
             <inertial pos="-0.01584301 -0.046233908 0.056138223" quat="1 0 0 0" mass="0.37321985" diaginertia="0.001276901 0.000390694 0.0015288" />
             <geom name="RR_thigh_visual_0" type="mesh" mesh="mesh_57_part_026_solid_026" pos="0 -0.071080804 -0.0615" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
             <geom name="RR_thigh_visual_1" type="mesh" mesh="mesh_58_part_018_solid_018" pos="0 -0.071080804 -0.0615" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -258,7 +258,7 @@
             <geom name="RR_thigh_collision_5" type="mesh" mesh="mesh_62_part_023_solid_023" pos="0 -0.071080804 -0.0615" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
             <body name="RR_foot_link" pos="-0.073465942 -0.15330608 0.0791">
               <site name="stackforce_foot_2" pos="0 0 -0.015000002521131567" size="0.005" rgba="0 0 0 0" />
-              <joint name="RR_calf_joint" type="hinge" axis="0 0 1" range="-0.64577182 0.6981317" limited="true" damping="0" />
+              <joint name="RR_calf_joint" type="hinge" axis="0 0 1" range="-0.64577182 0.6981317" limited="true" damping="0" armature="0.01" />
               <inertial pos="-0.040227404 0.045943209 -0.007497634" quat="1 0 0 0" mass="0.11638337" diaginertia="0.000258603 0.000260318 0.000514545" />
               <geom name="RR_foot_visual_0" type="mesh" mesh="mesh_63_part_024_solid_024" pos="0.073465942 0.08222528 -0.1406" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
               <geom name="RR_foot_visual_1" type="mesh" mesh="mesh_64_part_027_solid_027" pos="0.073465942 0.08222528 -0.1406" quat="0.500000013 0.499999987 0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -272,7 +272,7 @@
           </body>
         </body>
         <body name="RL_hip" pos="0.05 0.073111961 -0.152" quat="-2.3e-8 1 0 0">
-          <joint name="RL_hip_joint" type="hinge" axis="0 0 1" range="-0.52359878 0.52359878" limited="true" damping="0" />
+          <joint name="RL_hip_joint" type="hinge" axis="0 0 1" range="-0.52359878 0.52359878" limited="true" damping="0" armature="0.01" />
           <inertial pos="0.000774289 0.000017265 0.064960064" quat="1 0 0 0" mass="0.18869452" diaginertia="0.000231859 0.000175692 0.000084872" />
           <geom name="RL_hip_visual_0" type="mesh" mesh="mesh_67_part_030_solid_030" pos="-0.05 0 0.006" quat="-2.3e-8 -1 0 0" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
           <geom name="RL_hip_visual_1" type="mesh" mesh="mesh_68_part_031_solid_031" pos="-0.05 0 0.006" quat="-2.3e-8 -1 0 0" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -291,7 +291,7 @@
           <geom name="RL_hip_collision_6" type="mesh" mesh="mesh_73_part_035_solid_035" pos="-0.05 0 0.006" quat="-2.3e-8 -1 0 0" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
           <geom name="RL_hip_collision_7" type="mesh" mesh="mesh_74_part_036_solid_036" pos="-0.05 0 0.006" quat="-2.3e-8 -1 0 0" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
           <body name="RL_thigh" pos="0.0115 0 0.077080804" quat="0.500000013 -0.5 0.499999987 -0.5">
-            <joint name="RL_thigh_joint" type="hinge" axis="0 0 1" range="-1.0471976 1.57" limited="true" damping="0" />
+            <joint name="RL_thigh_joint" type="hinge" axis="0 0 1" range="-1.0471976 1.57" limited="true" damping="0" armature="0.01" />
             <inertial pos="-0.015889179 0.046318039 0.056148584" quat="1 0 0 0" mass="0.37335992" diaginertia="0.001279609 0.000391418 0.001532273" />
             <geom name="RL_thigh_visual_0" type="mesh" mesh="mesh_75_part_041_solid_041" pos="0 0.071080804 -0.0615" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
             <geom name="RL_thigh_visual_1" type="mesh" mesh="mesh_76_part_044_solid_044" pos="0 0.071080804 -0.0615" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
@@ -309,7 +309,7 @@
             <geom name="RL_thigh_collision_6" type="mesh" mesh="mesh_81_part_042_solid_042" pos="0 0.071080804 -0.0615" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.45 0.48 0.52 0" contype="1" conaffinity="1" group="3" friction="0.8 0.02 0.002" />
             <body name="RL_foot_link" pos="-0.073465942 0.15330608 0.0791">
               <site name="stackforce_foot_3" pos="0 0 -0.015000002521131567" size="0.005" rgba="0 0 0 0" />
-              <joint name="RL_calf_joint" type="hinge" axis="0 0 1" range="-0.6981317 0.64577182" limited="true" damping="0" />
+              <joint name="RL_calf_joint" type="hinge" axis="0 0 1" range="-0.6981317 0.64577182" limited="true" damping="0" armature="0.01" />
               <inertial pos="-0.040227404 -0.045943209 -0.007497634" quat="1 0 0 0" mass="0.11638337" diaginertia="0.000258603 0.000260318 0.000514545" />
               <geom name="RL_foot_visual_0" type="mesh" mesh="mesh_82_part_043_solid_043" pos="0.073465942 -0.08222528 -0.1406" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />
               <geom name="RL_foot_visual_1" type="mesh" mesh="mesh_83_part_046_solid_046" pos="0.073465942 -0.08222528 -0.1406" quat="0.500000013 -0.499999987 -0.5 -0.5" rgba="0.75 0.77 0.8 1" contype="0" conaffinity="0" group="2" mass="0" />

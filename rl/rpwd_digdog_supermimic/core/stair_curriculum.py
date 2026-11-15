@@ -3,6 +3,7 @@
 All buffers are training-only metadata, never actor observations.
 """
 import torch
+from ..robot.config import STAND_HEIGHT
 
 KINDS = ('flat', 'up', 'down', 'platform', 'slope', 'rubble')
 MIN_ITERATIONS = (0, 3000, 8000, 15000, 22000)
@@ -25,8 +26,11 @@ def stair_pass(offset, gravity, level, up):
   """Require body/rear clearance of the last riser, correct landing height and stability."""
   heights = offset.new_tensor([.02, .04, .06, .08, .10, .12])[level]
   expected = torch.where(up, 5 * heights, -5 * heights)
+  # 机身高度窗口必须按本机器人0.16m站高，而不是点足0.34m的固定 .23/.46。
+  lo = expected + STAND_HEIGHT - .10
+  hi = expected + STAND_HEIGHT + .12
   return ((offset[:, 0].abs() > 2.8) & (offset[:, 1].abs() < 2.5)
-          & (offset[:, 2] > expected + .23) & (offset[:, 2] < expected + .46)
+          & (offset[:, 2] > lo) & (offset[:, 2] < hi)
           & (gravity[:, :2].norm(dim=-1) < .4))
 
 

@@ -4,10 +4,11 @@ from .kinematics import safe_atan2
 import torch
 from .kinematics import foot_state
 
-WEIGHTS=dict(track_linear_velocity=2.5,track_angular_velocity=1.,upright=.3,
+WEIGHTS=dict(track_linear_velocity=2.5,track_angular_velocity=2.,upright=.3,
  standstill=-1.,action_rate_l2=-.025,dof_pos_limits=-1.,terminated=-20.,
  base_height=-.3,foot_xy=-.12,swing_clearance=-.5,contact_phase=-.15,
- foot_slip=-.1,landing_velocity=-.05,body_motion=-.02,obstacle_progress=.5)
+ foot_slip=-.1,landing_velocity=-.05,body_motion=-.02,obstacle_progress=.5,
+ yaw_rate_l2=-1.,lateral_vel_l2=-.5,stair_progress=1.)
 
 def constants(bridge,reference=None):
  from .policy import Actor
@@ -43,6 +44,12 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
  violation=((limits[:,0]-q).clamp_min(0)+(q-limits[:,1]).clamp_min(0)).sum(-1)
  near=(clearance<.04).float()
  forward=(state[:,4:6]*command[:,:2]).sum(-1)/speed
+ # 直行约束：指令偏航/横移接近0时，直接惩罚机体偏航率和横向速度。
+ straight=(command[:,2].abs()<.1).float(); lateral=(command[:,1].abs()<.1).float()
+ # 上阶进度：脚下支撑高于机身所在地形时，奖励继续向前迈。
+ base_ground=field.sample(pose[:,:2])
+ step_height=(ground.amax(-1)-base_ground).clamp(0,.15)
+ stair_progress=step_height*forward.clamp(-.6,.6)*(speed>.1).float()*10.
  return dict(
   track_linear_velocity=torch.exp(-(state[:,4:6]-command[:,:2]).square().sum(-1)/.09),
   track_angular_velocity=torch.exp(-(state[:,9]-command[:,2]).square()/.09),
@@ -55,7 +62,10 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
   foot_slip=(support*velocity[:,:,:2].square().sum(-1)).mean(-1),
   landing_velocity=(near*velocity[:,:,2].square()).mean(-1),
   body_motion=state[:,6].square()+.2*state[:,7:9].square().sum(-1),
-  obstacle_progress=forward.clamp(-.6,.6)*(speed>.1).float()*rough)
+  obstacle_progress=forward.clamp(-.6,.6)*(speed>.1).float()*rough,
+  yaw_rate_l2=state[:,9].square()*straight,
+  lateral_vel_l2=state[:,5].square()*lateral,
+  stair_progress=stair_progress)
 
 def env_reward(env,term):
  if getattr(env,"_foot_reward_counter",-1)==env.common_step_counter:return env._foot_reward_cache[term].clone()

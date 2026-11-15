@@ -419,8 +419,8 @@ cd /media/rmer/data/rpwd_training/worktrees/rpwd-digdogv1-mjlab
   --lanes flat stairs4 stairs8 stairs12 --speed .2 --seconds 55 --seeds 0 1 2
 
 # 训练服务与实时日志
-systemctl --user status rpwd-digdog-mjlab-60k-20261115.service
-journalctl --user -u rpwd-digdog-mjlab-60k-20261115.service -f
+systemctl --user status rpwd-digdog-mjlab-60k-20261116.service
+journalctl --user -u rpwd-digdog-mjlab-60k-20261116.service -f
 ```
 
 适配细节、站姿/脚点常量和验证边界见 `rl/DIGDOG_MJLAB.md`。

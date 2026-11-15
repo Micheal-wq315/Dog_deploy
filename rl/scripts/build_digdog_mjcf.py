@@ -25,7 +25,7 @@ JOINT_MAP = {
 }
 PREFIX_MAP = {old: new.replace('_link', '') for old, new in BODY_MAP.items()}
 WRAPPER_QUAT = '0.5 0.5 0.5 0.5'
-DEFAULT_HEIGHT = 0.195
+DEFAULT_HEIGHT = 0.1692
 
 
 def main():
