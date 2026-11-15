@@ -402,3 +402,25 @@ cd /media/rmer/系统/rpwd_training/worktrees/rpwd-pointfoot-mjlab
 ```
 
 新点足235→12接口，不能加载旧Isaac点足或轮足模型。配置、课程、验收和稳定反传说明见 `rl/RPWD_POINTFOOT_MJLAB.md`。
+
+## 大狗 DigDogv1（新 MJCF，1.25Hz）
+
+```bash
+cd /media/rmer/data/rpwd_training/worktrees/rpwd-digdogv1-mjlab
+
+# 4096环境、60000轮正式训练（默认输出到数据盘）
+./rl/scripts/train_digdog_mjlab.sh
+
+# 从本机器人检查点续训；不能加载点足/轮足checkpoint
+./rl/scripts/train_digdog_mjlab.sh --resume /绝对路径/model_xxxxx.pt --iterations 60000
+
+# 原生MuJoCo CPU评测（平地/4/8/12cm，多种子）
+./rl/scripts/play_digdog_mjlab.sh --mode evaluate --checkpoint /绝对路径/model_xxxxx.pt \
+  --lanes flat stairs4 stairs8 stairs12 --speed .2 --seconds 55 --seeds 0 1 2
+
+# 训练服务与实时日志
+systemctl --user status rpwd-digdog-mjlab-60k-20261115.service
+journalctl --user -u rpwd-digdog-mjlab-60k-20261115.service -f
+```
+
+适配细节、站姿/脚点常量和验证边界见 `rl/DIGDOG_MJLAB.md`。
