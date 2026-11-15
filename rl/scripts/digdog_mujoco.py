@@ -85,6 +85,8 @@ class NativeGo2W:
         self.package = checkpoint.get('backend_package') or ('rpwd_digdog_supermimic' if checkpoint['format'].startswith('rpwd-digdog-') else 'go2w_supermimic')
         self.policy = importlib.import_module(self.package + '.core.policy')
         robot_config = importlib.import_module(self.package + '.robot.config')
+        kinematics = importlib.import_module(self.package + '.core.kinematics')
+        self.clock_frequency = kinematics.FREQUENCY
         evaluation_env_cfg, checkpoint_wheel_vel = self.policy.evaluation_env_cfg, self.policy.checkpoint_wheel_vel
         LEG_JOINT_NAMES, WHEEL_JOINT_NAMES = robot_config.LEG_JOINT_NAMES, robot_config.WHEEL_JOINT_NAMES
         self.robot_id = checkpoint.get('robot_id', 'go2w')
@@ -162,7 +164,7 @@ class NativeGo2W:
         return np.concatenate(([self.data.qpos[2]], r.T @ np.array([0., 0., -1.]),
                                r.T @ self.data.qvel[:3], self.data.qvel[3:6],
                                self.data.qpos[self.qadr[:12]] - self.default[:12],
-                               self.data.qvel[self.vadr[:12]], np.array([math.sin(2*math.pi*1.5*self.data.time),math.cos(2*math.pi*1.5*self.data.time)]))).astype(np.float32)
+                               self.data.qvel[self.vadr[:12]], np.array([math.sin(2*math.pi*self.clock_frequency*self.data.time),math.cos(2*math.pi*self.clock_frequency*self.data.time)]))).astype(np.float32)
 
     def observation(self, command):
         frame, push_history, TERMS = self.policy.frame, self.policy.push_history, self.policy.TERMS
