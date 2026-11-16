@@ -15,6 +15,8 @@
 | legged_gym | [leggedrobotics/legged_gym](https://github.com/leggedrobotics/legged_gym) | 足式机器人环境、接触与腾空奖励参考；也是 Extreme Parkour 的代码基础之一。 |
 | Unitree RL mjlab | [unitreerobotics/unitree_rl_mjlab](https://github.com/unitreerobotics/unitree_rl_mjlab) | Go2W 项目声明的机器人资产来源。 |
 | skrl | [Toni-SM/skrl](https://github.com/Toni-SM/skrl) | Extreme Parkour README 致谢的强化学习库；不是本仓库当前训练器依赖。 |
+| Watch Your Step / Foothold Prediction | [leggedrobotics/foothold-prediction-model](https://github.com/leggedrobotics/foothold-prediction-model) | ETH Zurich 人形 Unitree G1 的落脚点预测（FPM）；论文 arXiv:2610.29612v1（2026-10）；中文导读 `output/pdf/watch_your_step_中文导读.pdf`，官方代码在主工作区根目录有本地克隆。研究参考，不是当前四足训练/部署依赖；人形→四足迁移需重做。 |
+| go2_quad2hand | [Sang-SC/go2_quad2hand](https://github.com/Sang-SC/go2_quad2hand) | Unitree Go2 标准12关节四足+双足倒立；Isaac Gym + legged_gym + rsl_rl 1.0.2，PPO + 显式线速度估计器 + 非对称 Actor-Critic；MuJoCo/C++(SDK2,ONNX)部署；BSD-3；代码最后推送 2026-03-14。参考其估计器/倒立步态；平地训练、无台阶，不是当前依赖。 |
 
 ## 仿真与物理引擎
 
@@ -57,6 +59,7 @@
 
 ## 主要出处
 
+- 近期开源补充：Watch Your Step 中文导读 `output/pdf/watch_your_step_中文导读.pdf`；官方代码本地克隆 `foothold-prediction-model/`；Go2 四足/倒立参考 `Sang-SC/go2_quad2hand`。
 - 本仓库训练与算法说明：`rl/GO2W_REFERENCE.md`、`rl/GO2W_SUPERMIMIC_ANALYSIS.md`、`rl/HIMLOCO_SIM2SIM.md`、`rl/SUPERMIMIC_POINTFOOT_GAIT.md`。
 - 深度导航方案：`docs/odin1_nav_integration_plan.md`。
 - 部署端依赖与源码地址：`src/inference/.gitmodules`、`src/inference/thirdparty/CMakeLists.txt`、`src/inference/debian/copyright` 及 `src/inference/CMakeLists.txt`。
