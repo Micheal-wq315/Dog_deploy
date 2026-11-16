@@ -17,6 +17,8 @@
 | skrl | [Toni-SM/skrl](https://github.com/Toni-SM/skrl) | Extreme Parkour README 致谢的强化学习库；不是本仓库当前训练器依赖。 |
 | Watch Your Step / Foothold Prediction | [leggedrobotics/foothold-prediction-model](https://github.com/leggedrobotics/foothold-prediction-model) | ETH Zurich 人形 Unitree G1 的落脚点预测（FPM）；论文 arXiv:2610.29612v1（2026-10）；中文导读 `output/pdf/watch_your_step_中文导读.pdf`，官方代码在主工作区根目录有本地克隆。研究参考，不是当前四足训练/部署依赖；人形→四足迁移需重做。 |
 | go2_quad2hand | [Sang-SC/go2_quad2hand](https://github.com/Sang-SC/go2_quad2hand) | Unitree Go2 标准12关节四足+双足倒立；Isaac Gym + legged_gym + rsl_rl 1.0.2，PPO + 显式线速度估计器 + 非对称 Actor-Critic；MuJoCo/C++(SDK2,ONNX)部署；BSD-3；代码最后推送 2026-03-14。参考其估计器/倒立步态；平地训练、无台阶，不是当前依赖。 |
+| Go2 RL Lab（原 go2_rl_gym） | [wty-yy/go2_rl_lab](https://github.com/wty-yy/go2_rl_lab) | 首届腾讯开悟具身智能运控挑战赛冠军方案训练代码；Unitree Go2-Edu，仅本体感知，MoE-CTS；Isaac Lab 3.0/Newton MJWarp 与 Isaac Gym 两套分支（lab3.0/gym）；训练任务 go2-mixed-moe-cts 等；平地 4.5m/s/实测 4.07m/s，混合地形/30cm 障碍/雪地沙地；RoboGauge 异步评测；MIT；RSS 2026 论文。参考其 MoE/高速/混合地形训练，不是当前四足训练依赖。 |
+| RoboGauge | [wty-yy/RoboGauge](https://github.com/wty-yy/RoboGauge) | MIT；MuJoCo Sim2Sim 评测套件；5 类地形×10 难度、域随机化、8 项指标（关节限位/速度跟踪/能耗/姿态/力矩平滑/摩擦/ZMP 等）；Single/Multi/Level/Stress Pipeline、异步服务器和模型选择；当前支持 Go2，接入 RP_wd/DigDog 需新增机器人配置。 |
 
 ## 仿真与物理引擎
 
@@ -46,6 +48,7 @@
 | 项目 | 开源链接 | 与本仓库的关系 |
 |---|---|---|
 | roboparty_inference | [wentywenty/roboparty_inference](https://github.com/wentywenty/roboparty_inference) | `src/inference/debian/copyright` 中记录的源码地址；该上游地址当前可访问性尚未确认。 |
+| Unitree Go2 C++ Deploy | [wty-yy/unitree_cpp_deploy](https://github.com/wty-yy/unitree_cpp_deploy) | MIT（派生自 Unitree RL Lab 的部分为 Apache-2.0）；Go2-Edu Orin NX 的 unitree_sdk2 + ONNX Runtime 部署；FSM/手柄/四模型槽位；默认全地形 2m/s、平地 4.5m/s（实测 4.07m/s 冲刺）、另一全地形 2m/s。参考 Go2 实机部署/模型切换，不是当前 ROS2 部署依赖。 |
 | jie_3d_nav | [6-robot/jie_3d_nav](https://github.com/6-robot/jie_3d_nav) | Odin1 深度导航集成方案引用的 ROS2 导航项目。 |
 | mujoco-gui | [uwvwko-zzz/mujoco-gui](https://github.com/uwvwko-zzz/mujoco-gui) | UW-HIMLoco 中包含的浏览器 MuJoCo GUI 项目。 |
 | ArenaX | [Lain-Ego0/ArenaX](https://github.com/Lain-Ego0/ArenaX) | mujoco-gui 文档提及的早期设计参考。 |
@@ -60,6 +63,7 @@
 ## 主要出处
 
 - 近期开源补充：Watch Your Step 中文导读 `output/pdf/watch_your_step_中文导读.pdf`；官方代码本地克隆 `foothold-prediction-model/`；Go2 四足/倒立参考 `Sang-SC/go2_quad2hand`。
+- 腾讯开悟冠军方案 / RoboGauge：论文 arXiv:2602.00678（RSS 2026，Toward Reliable Sim-to-Real Predictability for MoE-based Robust Quadrupedal Locomotion），项目页 https://robogauge.github.io/complete/；训练/评测/部署代码见上表。
 - 本仓库训练与算法说明：`rl/GO2W_REFERENCE.md`、`rl/GO2W_SUPERMIMIC_ANALYSIS.md`、`rl/HIMLOCO_SIM2SIM.md`、`rl/SUPERMIMIC_POINTFOOT_GAIT.md`。
 - 深度导航方案：`docs/odin1_nav_integration_plan.md`。
 - 部署端依赖与源码地址：`src/inference/.gitmodules`、`src/inference/thirdparty/CMakeLists.txt`、`src/inference/debian/copyright` 及 `src/inference/CMakeLists.txt`。
