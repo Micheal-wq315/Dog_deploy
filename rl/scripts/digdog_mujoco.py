@@ -326,7 +326,7 @@ def play(sim, args):
         viewer.cam.trackbodyid = sim.base
         viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 2.8, 135, -25
         print(f"[就绪] 官方MuJoCo查看器，模型第{sim.checkpoint['step']}轮，场景{args.lane}", flush=True)
-        print("按住方向键前后/横移，Q/E转向，松开归零；Space停止；R复位；1..8切赛道；K暂停；Esc退出", flush=True)
+        print("按住方向键前后/横移，Q/E转向，松开归零；Space停止；R复位；1=flat 2=4cm 3=6cm 4=8cm 5=10cm 6=12cm 7=16cm 8=ramp；K暂停；Esc退出", flush=True)
         paused = False
         while viewer.is_running():
             began = time.monotonic()

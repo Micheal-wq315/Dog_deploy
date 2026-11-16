@@ -421,6 +421,10 @@ cd /media/rmer/data/rpwd_training/worktrees/rpwd-digdogv1-mjlab
 # 训练服务与实时日志
 systemctl --user status rpwd-digdog-mjlab-60k-20261116.service
 journalctl --user -u rpwd-digdog-mjlab-60k-20261116.service -f
+
+# 全高度台阶键盘测试（4/6/8/10/12/16cm；自动取最新模型）
+./rl/scripts/play_digdog_stairs.sh
+# 键位：1=flat 2=4cm 3=6cm 4=8cm 5=10cm 6=12cm 7=16cm 8=ramp
 ```
 
 适配细节、站姿/脚点常量和验证边界见 `rl/DIGDOG_MJLAB.md`。

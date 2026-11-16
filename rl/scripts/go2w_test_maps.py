@@ -5,7 +5,7 @@ import math
 import mujoco
 import numpy as np
 
-LANES = ("flat", "stairs4", "stairs8", "stairs12", "ramp", "rubble", "mixed", "slalom")
+LANES = ("flat", "stairs4", "stairs6", "stairs8", "stairs10", "stairs12", "stairs16", "ramp", "rubble", "mixed", "slalom")
 PROFILES = {"easy": .75, "standard": 1., "hard": 4 / 3}
 
 
@@ -14,17 +14,18 @@ def add_test_park(spec, seed=0, profile="standard"):
     scale = PROFILES[profile]
     manifest = {"generator": "go2w-native-park-v1", "seed": seed, "profile": profile,
                 "height_scale": scale, "lanes": [], "geometry": []}
-    colors = ((.33, .65, .72), (.35, .67, .43), (.83, .64, .26), (.78, .37, .31),
-              (.40, .55, .79), (.62, .52, .42), (.62, .42, .73), (.68, .58, .33))
+    colors = ((.33, .65, .72), (.35, .67, .43), (.72, .55, .35), (.83, .64, .26),
+              (.45, .62, .68), (.78, .37, .31), (.58, .48, .72), (.40, .55, .79),
+              (.62, .52, .42), (.62, .42, .73), (.68, .58, .33))
     world = spec.worldbody
     world.add_geom(name="test_ground", type=mujoco.mjtGeom.mjGEOM_PLANE,
-                   size=(16., 20., .1), rgba=(.24, .28, .32, 1), group=0,
+                   size=(16., 24., .1), rgba=(.24, .28, .32, 1), group=0,
                    contype=1, conaffinity=1, condim=3, friction=(.8, .02, .001))
     world.add_light(name="test_sun", pos=(0, 0, 10), dir=(-.3, -.2, -1),
                     type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
                     castshadow=False, diffuse=(.8, .8, .8))
     spec.visual.quality.shadowsize = 1024
-    spec.stat.extent = 18
+    spec.stat.extent = 24
 
     def box(name, x, y, height, length, width, color, yaw=0., base=0.):
         if height <= 0:
@@ -59,7 +60,7 @@ def add_test_park(spec, seed=0, profile="standard"):
                     a, b, color, yaw=rng.uniform(-.30, .30))
 
     for i, (name, color) in enumerate(zip(LANES, colors)):
-        y, goal = (i - 3.5) * 4., 7.5
+        y, goal = (i - (len(LANES) - 1) / 2) * 4., 7.5
         lane = dict(name=name, number=i + 1, center_y=y, spawn=[.5, y, .4],
                     goal_x=goal, half_width=1.3, manual_navigation=name == "slalom")
         # 标线只有视觉效果，不制造毫米级假台阶。

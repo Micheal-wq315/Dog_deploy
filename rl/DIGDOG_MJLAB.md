@@ -108,6 +108,15 @@ step 15000（`MIN_ITERATIONS`）才正式解锁，当前 command_stage 仍为 2�
   --lanes flat stairs4 stairs8 stairs12 --speed .2 --seconds 55 --seeds 0 1 2
 ```
 
+全高度键盘测试（4/6/8/10/12/16cm，自动取最新模型）：
+
+```bash
+./rl/scripts/play_digdog_stairs.sh
+```
+
+键位：1=flat、2=4cm、3=6cm、4=8cm、5=10cm、6=12cm、7=16cm、8=ramp；方向键/横移、Q/E 转向、Space 停止、R 复位、K 暂停、Esc 退出。
+测试场从 x=0.5 出生、台阶从 x=2.2 开始，5 秒短测到不了台阶；至少留 30–50 秒或直接用键盘走过去。
+
 已验证：修复后 0.16m 站姿的 12 轮短模型平地 5 秒测试完成（前进约 1.53m、
 均速约 0.206m/s、无翻倒/非足端碰撞）；4096 环境 2 轮冒烟显存峰值约 3.2GB；
 8 环境 12 轮更新冒烟中新奖励项均有限、0 跳过更新、0 无效复位；步态扫描在
