@@ -76,6 +76,29 @@ stdout `train_stdout.log`，指标 `metrics.jsonl`。4096 环境、60000 轮、s
 每 5000 轮 CPU 确定性抽查。启动检查以 metrics.jsonl 为准；
 **这不等于收敛或上阶能力**。
 
+截至 2026-11-16 12:13（step 10050/60000，4.66 小时）：0 跳过、0 无效复位；
+stage 0→1 在 step 4800（4cm），stage 1→2 在 step 8050（6cm）；当前 stage 2（8cm）
+最近 **198 次考核 121 次通过（61.1%，已达 60% 门槛）**。stage 3 需要等课程下限
+step 15000（`MIN_ITERATIONS`）才正式解锁，当前 command_stage 仍为 2；
+步态约 1.4Hz，平均地形等级 1.92。
+
+独立 CPU 抽查：
+- `check_5000`：平地 **completed**、4cm **completed**、8cm stuck（停在第一级前）。
+- `check_10000`：平地 timeout 但 max_x 10.21（终点 7.5，已越过）、4cm **completed**、
+  8cm timeout 但 max_x 9.81（终点 7.5，已越过）。平地/8cm 是到达/越过终点后
+  成功标志未触发（稳定通过条件对当前步态偏严），不是没走完；判据需后续复核。
+- 10cm/12cm 和最终验收仍待训练后确认。
+
+## 仓库当前的大狗（四条）
+
+| 机器人 | 训练包 | 接口 | 当前状态 |
+|---|---|---|---|
+| RP_wd 大狗轮足版 | `rl/rp_wd_rl`（Isaac Lab）/ `rl/rpwd_go2w_supermimic --robot rpwd`（MuJoCo） | 168→16 / 245→16 | 原部署机器人，16关节（12腿+4轮）；PPO/Odin/SuperMimic链路保留；MuJoCo迁移已接入 |
+| Go2W 轮足参考 | `rl/rpwd_go2w_supermimic --robot go2w` | 245→16 | 原版参考/原生测试链路保留 |
+| RP_wd 大狗点足版 | `rl/rpwd_pointfoot_supermimic` | 235→12 | 17.038kg、1.5Hz；60k训练因重启停在约57600，55k抽查平地/4/8cm通过，12cm完整赛道未过 |
+| DigDogv1 大狗点足版 | `rl/rpwd_digdog_supermimic` | 235→12 | 3.495kg、1.25Hz；第二轮训练中，4/6cm已晋级，8cm训练通过率61.1%（stage3按课程下限15000轮解锁） |
+
+
 ## 测试
 
 ```bash

@@ -30,6 +30,15 @@ Isaac Lab转移回放→集成世界模型→想象轨迹梯度优化Actor→DAg
 轮足大狗与Go2W共用SuperMimic算法、修正版晋级课程和独立部署导出见
 [RPWD_GO2W_MIGRATION.md](RPWD_GO2W_MIGRATION.md)。
 
+## 当前仓库的大狗版本（四条）
+
+| 机器人 | 训练包 | 接口 | 当前状态 |
+|---|---|---|---|
+| RP_wd 大狗轮足版 | `rl/rp_wd_rl`（Isaac Lab）/ `rl/rpwd_go2w_supermimic --robot rpwd`（MuJoCo） | 168→16 / 245→16 | 原部署机器人，16关节（12腿+4轮）；PPO/Odin/SuperMimic链路保留；MuJoCo迁移已接入，未自动启动新一轮长期训练 |
+| Go2W 轮足参考 | `rl/rpwd_go2w_supermimic --robot go2w` | 245→16 | 原版Go2W参考/原生测试链路保留 |
+| RP_wd 大狗点足版 | `rl/rpwd_pointfoot_supermimic` | 235→12 | 17.038kg、1.5Hz；60000轮训练因重启停在约57600，55k抽查平地/4/8cm通过，12cm完整赛道仍卡下阶过渡 |
+| DigDogv1 大狗点足版 | `rl/rpwd_digdog_supermimic` | 235→12 | 3.495kg、1.25Hz；第二轮训练中，4/6cm已晋级，8cm训练通过率61.1%（已达60%，stage3按课程下限15000轮解锁），详见 [DIGDOG_MJLAB.md](DIGDOG_MJLAB.md) |
+
 ## 目录结构
 
 ```
