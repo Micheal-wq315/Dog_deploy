@@ -11,7 +11,10 @@ STAGES = (
 
 
 def set_command_stage(cfg, iteration, stage=None):
+  # 地形课程有 0..6 段（含 14/16cm 探针），命令速度表只有 0..4 五档；
+  # 地形探针升到第 5/6 段时沿用最后一档，不能拿 5 去索引 STAGES。
   index = stage if stage is not None else max(i for i, item in enumerate(STAGES) if max(0,iteration) >= item[0])
+  index = min(max(int(index), 0), len(STAGES) - 1)
   _, x, y, yaw = STAGES[index]
   cfg.ranges.lin_vel_x, cfg.ranges.lin_vel_y, cfg.ranges.ang_vel_z = x, y, yaw
   return index

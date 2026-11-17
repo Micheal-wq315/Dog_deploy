@@ -432,6 +432,9 @@ journalctl --user -u rpwd-digdog-mjlab-60k-20261116.service -f
 ./rl/scripts/train_digdog_scan_teacher.sh
 # LiDAR 学生（默认取最新教师，冻结教师做 BC+RL，20000轮；同样 3072 环境）
 TEACHER=/绝对路径/教师run/model_20000.pt ./rl/scripts/train_digdog_lidar_student.sh
+# 教师续训：同一 run 目录，保留地形/课程/优化器；回放会重新预热
+RESUME=/绝对路径/教师run/model_13000.pt DIGDOG_MJLAB_RUN=/绝对路径/教师run \
+  ./rl/scripts/train_digdog_scan_teacher.sh
 # 教师 20k 跑完后自动做 9 条 lane 短评测并接力学生；门槛不过则保留教师
 TEACHER_RUN=/绝对路径/教师run ./rl/scripts/auto_digdog_teacher_student.sh
 # 可调: EVAL_SECONDS=20 GATE_MIN_X=2.0 STUDENT_ITERATIONS=20000 STUDENT_RUN=... DRY_RUN=1
