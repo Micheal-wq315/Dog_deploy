@@ -431,7 +431,11 @@ journalctl --user -u rpwd-digdog-mjlab-60k-20261116.service -f
 # MuJoCo Warp 静态 geom 缓冲，地面接触被静默丢弃，机器人会自由落体。
 ./rl/scripts/train_digdog_scan_teacher.sh
 # LiDAR 学生（默认取最新教师，冻结教师做 BC+RL，20000轮；同样 3072 环境）
-TEACHER=/绝对路径/教师run/model_02000.pt ./rl/scripts/train_digdog_lidar_student.sh
+TEACHER=/绝对路径/教师run/model_20000.pt ./rl/scripts/train_digdog_lidar_student.sh
+# 教师 20k 跑完后自动做 9 条 lane 短评测并接力学生；门槛不过则保留教师
+TEACHER_RUN=/绝对路径/教师run ./rl/scripts/auto_digdog_teacher_student.sh
+# 可调: EVAL_SECONDS=20 GATE_MIN_X=2.0 STUDENT_ITERATIONS=20000 STUDENT_RUN=... DRY_RUN=1
+# 日志: 教师run/auto_chain.log、auto_eval.log、auto_student.log
 # 带高度图 checkpoint 的评测/键盘测试会自动识别 scan_mode（true/lidar）
 ./rl/scripts/play_digdog_mjlab.sh --mode evaluate --checkpoint /绝对路径/model_xxxxx.pt \
   --lanes flat stairs4 stairs8 stairs12 stones tires --speed .2 --seconds 55 --seeds 0 1 2
