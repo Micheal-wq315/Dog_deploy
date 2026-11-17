@@ -132,3 +132,18 @@ step 15000（`MIN_ITERATIONS`）才正式解锁，当前 command_stage 仍为 2�
   `profile.height_band_*`，改后应重新跑原生平地与台阶短测。
 - `robot_id=rpwd_digdog`，检查点格式 `rpwd-digdog-*`；禁止与
   `rpwd_pointfoot` / Go2W / 旧 Isaac 检查点交叉加载。
+
+## 2026-11-17 正向退化回归检查
+
+用 `test/dig_dog/record_test.py` 对 model_20000~60000 做正向/反向 stairs12：
+model_20000 正 9.99/反 9.75，model_30000 正 9.42/反 2.37（摔倒），
+model_40000~60000 正向卡 2.3/反向 9.59~9.83。退化发生在 **30k→40k**。
+
+定位：Actor LR 调度（20k 6e-5 → 30k 3.6e-5 → 40k+ 1.2e-5 地板）为主触发器；
+前腿台阶 clearance 从 0.322/0.332 降到 0.224/0.224、前足 peak 111.6/93.1N
+降到 63.6/64.0N，后腿保持，`swing_clearance` 奖励从 -0.0188 恶化到 -0.0339；
+`stair_pass` 只看升段 + 双向地形使反向/下阶成为局部最优（up12 64.8% vs down12 89.9%）；
+命令 stage4/地形等级 3.49→4.83 是放大因素。世界模型/critic/资产排除。
+
+当前可用 **model_20000** 做正向/反向对照；下一版应从 model_20000 做
+Actor LR 地板、命令上限、前腿抬脚和完整往返消融，不要从 60k 单调续训。
