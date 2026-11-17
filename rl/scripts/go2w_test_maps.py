@@ -5,7 +5,7 @@ import math
 import mujoco
 import numpy as np
 
-LANES = ("flat", "stairs4", "stairs6", "stairs8", "stairs10", "stairs12", "stairs16", "ramp", "rubble", "mixed", "slalom")
+LANES = ("flat", "stairs4", "stairs6", "stairs8", "stairs10", "stairs12", "stairs16", "ramp", "rubble", "mixed", "slalom", "stones", "tires")
 PROFILES = {"easy": .75, "standard": 1., "hard": 4 / 3}
 
 
@@ -16,16 +16,19 @@ def add_test_park(spec, seed=0, profile="standard"):
                 "height_scale": scale, "lanes": [], "geometry": []}
     colors = ((.33, .65, .72), (.35, .67, .43), (.72, .55, .35), (.83, .64, .26),
               (.45, .62, .68), (.78, .37, .31), (.58, .48, .72), (.40, .55, .79),
-              (.62, .52, .42), (.62, .42, .73), (.68, .58, .33))
+              (.62, .52, .42), (.62, .42, .73), (.68, .58, .33), (.55, .70, .48),
+              (.30, .32, .35))
     world = spec.worldbody
+    # MuJoCo 的 mj_ray 只覆盖 plane 的 size 半宽；13 条 lane 最外侧在 y=±24，
+    # 原 24m 半宽会让轮胎 lane 的测高射线一出边界就判定 nonfinite。
     world.add_geom(name="test_ground", type=mujoco.mjtGeom.mjGEOM_PLANE,
-                   size=(16., 24., .1), rgba=(.24, .28, .32, 1), group=0,
+                   size=(18., 30., .1), rgba=(.24, .28, .32, 1), group=0,
                    contype=1, conaffinity=1, condim=3, friction=(.8, .02, .001))
     world.add_light(name="test_sun", pos=(0, 0, 10), dir=(-.3, -.2, -1),
                     type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
                     castshadow=False, diffuse=(.8, .8, .8))
     spec.visual.quality.shadowsize = 1024
-    spec.stat.extent = 24
+    spec.stat.extent = 30
 
     def box(name, x, y, height, length, width, color, yaw=0., base=0.):
         if height <= 0:
@@ -103,6 +106,35 @@ def add_test_park(spec, seed=0, profile="standard"):
                 box(f"slalom_{k}", 2.5 + 1.6 * k, y + (.65 if k % 2 == 0 else -.65),
                     .35, .50, 1.05, color)
             lane.update(description="遥控绕障；需要操作者选择路线，盲策略没有自主避障输入")
+        elif name == "stones":
+            for ix, x in enumerate(np.arange(2.2, 6.8, .46)):
+                for iy, yy in enumerate((-.82, -.30, .30, .82)):
+                    if (ix + iy) % 2:
+                        continue
+                    h = (.02 + .02 * (ix % 6)) * scale
+                    box(f"stones_{ix}_{iy}", x + rng.uniform(-.02, .02),
+                        y + yy + rng.uniform(-.02, .02), h, .30, .30, color,
+                        yaw=rng.uniform(-.15, .15))
+            lane.update(max_obstacle_height=.12 * scale,
+                        description="梅花桩：交错箱体岛，桩间留跨步间隙")
+        elif name == "tires":
+            for ix, x in enumerate(np.arange(2.2, 6.8, .62)):
+                for iy, yy in enumerate((-.85, -.30, .30, .85)):
+                    if (ix + iy) % 2:
+                        continue
+                    radius = (.06 + .012 * (ix % 5)) * scale
+                    half = .10
+                    world.add_geom(name=f"test_tires_{ix}_{iy}",
+                                   type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                                   pos=(x, y + yy, radius), size=(radius, half, 0.),
+                                   quat=(math.sqrt(.5), -math.sqrt(.5), 0., 0.),
+                                   rgba=(*color, 1), group=0, contype=1, conaffinity=1,
+                                   condim=3, friction=(.8, .02, .001))
+                    manifest["geometry"].append(dict(name=f"tires_{ix}_{iy}",
+                                                     pos=[x, y + yy, radius],
+                                                     size=[radius, half]))
+            lane.update(max_obstacle_height=.17 * scale,
+                        description="横放轮胎：圆柱轴沿车道横向")
         else:
             lane.update(description="平地速度、横移与转向基线")
         manifest["lanes"].append(lane)

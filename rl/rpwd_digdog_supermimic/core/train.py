@@ -289,8 +289,10 @@ class Learner:
     self.model.load_state_dict(self.model_class.from_checkpoint(ckpt["world_model"]).state_dict())
     self.critic.load_state_dict(ckpt["critic"])
     self.target.load_state_dict(ckpt["target_critic"])
-    self.terrain_state = ckpt.get("terrain_state")
-    self.curriculum_state = ckpt.get("curriculum_state")
+    # 地形集合已从 6 类扩到 8 类（stones/tires、16cm 等级），旧 terrain/curriculum
+    # 统计的 type/level 维度不兼容；热启动只搬权重，课程从新环境重新开始。
+    self.terrain_state = None
+    self.curriculum_state = None
     self.policy_updates = 0
     self.skipped_updates = 0
     self.compiler_fallbacks = 0

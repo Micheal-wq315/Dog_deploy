@@ -221,8 +221,8 @@ Actor LR 地板、命令上限、前腿抬脚和完整往返消融，不要从 6
 - 原生 MuJoCo 平地短测可加载教师/学生 checkpoint；`record_test.py` 输出
   `height_scan.npy (50,273)`、`observations.npy (50,235)`、`scan_mode=lidar`，
   扫描值范围 -2.0~0.17。
-- 以上是**链路烟测**，不是能力结论；4096 环境正式教师/学生训练、12cm/16cm
-  与真实 Mid-360 部署尚待进行。
+- 以上是**链路烟测**，不是能力结论；正式教师/学生训练已在 3072 环境启动（见下节，
+  4096 会因 MuJoCo Warp 静态 geom 缓冲丢地面接触），12/16cm 与真实 Mid-360 部署仍待验证。
 
 ### 待办 / 风险
 
@@ -238,3 +238,57 @@ Actor LR 地板、命令上限、前腿抬脚和完整往返消融，不要从 6
    学生选教师时应结合 `record_test.py` 的正/反向 `max_x`，不要只看最后一步。
 5. **蒸馏权重**：`distill_coef=1.0` 是初值；若学生只会模仿教师、RL 跟踪变差，先降到
    0.2–0.5；若 LiDAR 噪声下动作抖动，先加大 `noise_std/dropout` 或教师数据覆盖。
+
+## 2026-11-17 全地形扩展（stones/tires/16cm）与 3072 环境约束
+
+### 地形与课程
+
+- `STEP_HEIGHTS` 扩到 **8 档**：0.02–0.16m（新增 14/16cm）；`CourseCfg` 的 level 按 0..7 映射。
+- **8 类地形**：`flat/up/down/platform/slope/rubble/stones/tires`，比例
+  `.28/.32/.14/.04/.04/.08/.05/.05`。
+- `stones`：交错箱体梅花桩，高度 2–16cm；`tires`：横放圆柱（轴沿车道横向），
+  半径 5.5–13cm，宽度 9–13cm。训练用两者只铺**中央 4.8m 通道**（测试场仍全宽），
+  控制 4096 级并行下的 geom 总数。
+- `stair_curriculum` 同步为 8 类/8 档：`KINDS`、`HEIGHTS`、stats `(8,8,4)`、
+  最近窗口 6 档、探针/晋级/报告全部按 8 档。
+- 20k 教师课程下限改为 `(0,2000,5000,8000,11000,13000,15000)`：第 6 段（14cm 考核）
+  在 15000 轮解锁，留 5000 轮训练 16cm；旧表 34000 轮在 20k 内到不了 16cm。
+- 地形集合从 6 类扩到 8 类后，热启动只搬权重；旧 6×6×4 terrain/curriculum 统计与新
+  8×8×4 不兼容，`Learner.warm_start` 重置 `terrain_state/curriculum_state`（同地形
+  `--resume` 不受影响）。
+
+### 关键坑：4096 环境丢失地面接触
+
+- **现象**：8 类地形 4096 环境训练初始 reward 从 -8 迅速恶化到 -2e6，
+  `weighted_reward_terms.base_height` 从 -399 到 -3.6e6，机器人整体自由落体；
+  `ncollision=0`、`wheel_ground_contact=0`。64 环境 GPU、32 环境 CPU 均正常。
+- **定位**：新地形模型有 **6958 个 geom**。MuJoCo Warp 的静态 geom 总缓冲约 25M
+  （4096×6144）；`4096×6958=28.5M` 超限后 broadphase/narrowphase **静默不产地面接触**。
+  对照：旧 6 类 4484×4096=18.4M 正常；6 类 8 档 5982×4096=24.5M 正常；
+  7 类 6222×4096=25.5M 失效。`nconmax=512` 会在 CCD EPA 申请 6.4GB 直接 OOM；
+  禁用 CCD、关闭 CUDA graph、切换 `sap_segmented` 均不能修复。
+- **处理**：新的教师/学生脚本固定 `--num-envs 3072`（3072×6958=21.4M），
+  保持 8 类地形完整；4096 仅适用于旧 6 类地形。
+- **验证**：3072 零动作 10 步 `wheel_ground_contact=13587`、root z 0.178m；
+  正式教师 step 50 reward 0.079、`base_height≈0`、`wm_loss=0.31`，
+  8 类地形各 124–981 个环境（stones/tires 各 154）。
+
+### 测试场与脚本
+
+- `go2w_test_maps.py` 的 `LANES` 扩到 **13 条**：flat/stairs4/6/8/10/12/16/ramp/
+  rubble/mixed/slalom/stones/tires；测试场 plane 扩为 18×30m、`stat.extent=30`。
+  MuJoCo `mj_ray` 只覆盖 plane 的 size 半宽；原 24m 半宽下 y=24 的 tires lane
+  一移动就 `nonfinite`。
+- `digdog_mujoco.py` 键位 1–8 = LANES 前 8 条，9=stones，0=tires；查看器图例同步。
+- `play_digdog_stairs.sh` 自动取最新 `model_*.pt`（跨 run）。
+- `core/terrain.py` 的 `TerrainField.from_model` 支持圆柱高度场：按圆柱轴向求垂直射线
+  与圆柱面的交点，取顶面；训练环境与原生测试共用。
+- 原生验证：tires lane 3s 到 x=1.32m、无 nonfinite；stones 同样；两条 lane 的障碍从
+  x=2.2 开始，短测不作为通过能力结论。
+
+### 训练
+
+- 教师 run：`/media/rmer/data/rpwd_training/digdog_mjlab/2026-11-17_23-22-42_digdog_scan_teacher`，
+  3072 环境、20000 轮、seed0、从 `model_20000` 热启动；step 50 指标已恢复。
+- 16cm 训练要等 stage 6（≥15000 轮）；当前只是训练配置，不是能力结论；教师/学生完成后
+  用 `record_test.py`/原生评测做多 lane 回归。

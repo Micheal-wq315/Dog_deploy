@@ -12,6 +12,7 @@ fi
   exit 1
 }
 export DIGDOG_MJLAB_RUN="${DIGDOG_MJLAB_RUN:-$DIGDOG_MJLAB_DATA/$(date +%Y-%m-%d_%H-%M-%S)_digdog_lidar_student}"
+# 与教师相同的 8 类地形：3072 环境才能容纳 6958 个 geom 而不丢地面接触。
 exec "$DIR/train_digdog_mjlab.sh" \
-  --scan lidar --scan-hidden 256 128 64 --teacher "$TEACHER" --warm-start "$TEACHER" \
+  --num-envs 3072 --scan lidar --scan-hidden 256 128 64 --teacher "$TEACHER" --warm-start "$TEACHER" \
   --distill-coef 1.0 --iterations 20000 --save-interval 500 --log-interval 50 "$@"
