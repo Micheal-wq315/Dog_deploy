@@ -139,6 +139,25 @@ class NativeGo2W:
                                     for i in range(self.model.ngeom)])
         self.wheel_geom = {self.model.geom(f"robot/{leg}_foot_collision_{k}").id: i
                            for i, leg in enumerate(("FL", "FR", "RL", "RR")) for k in range(4)}
+        # 带高度图分支的策略需要真实高度场；LiDAR 学生再用 Mid-360 模拟降级。
+        self.scan_dim = int(getattr(actor, 'scan_dim', 0))
+        self.scan_mode = checkpoint.get('scan_mode') or checkpoint.get('config', {}).get('scan', 'none')
+        self.field = None
+        self.lidar = None
+        self.scan_cache = None
+        self.scan_step = 0
+        self.scan_hold = 1
+        if self.scan_dim:
+            from rpwd_digdog_supermimic.core.terrain import TerrainField
+            from rpwd_digdog_supermimic.core.lidar import LidarHeightScan
+            robot_ids = set(np.where(self.robot_geom)[0].tolist())
+            self.field = TerrainField.from_model(self.model, robot_ids, resolution=.04,
+                                                 bounds=((-16., -26.), (16., 26.)), device='cpu')
+            if self.scan_mode == 'lidar':
+                self.lidar = LidarHeightScan()
+                self.scan_hold = self.lidar.cfg.hold_steps(self.dt)
+            elif self.scan_mode != 'true':
+                raise ValueError(f"高度图策略的 scan_mode 不合法：{self.scan_mode}")
         self.reset("stairs8")
 
     def reset(self, lane, seed=0):
@@ -153,6 +172,8 @@ class NativeGo2W:
             self.data.qpos[3:7] = (math.cos(yaw / 2), 0, 0, math.sin(yaw / 2))
         self.previous = np.zeros(12, dtype=np.float32)
         self.history = None
+        self.scan_cache = None
+        self.scan_step = 0
         self.data.ctrl[self.actuators[:12]] = self.default[:12]
         self.data.ctrl[self.actuators[12:]] = 0.
         self.peak_nonwheel, self.contacts = 0., np.zeros(4, dtype=bool)
@@ -181,6 +202,28 @@ class NativeGo2W:
             raise RuntimeError("原生策略观测无效")
         return self.history
 
+    def _pose(self):
+        r = self.data.xmat[self.base].reshape(3, 3)
+        return np.array([self.data.qpos[0], self.data.qpos[1],
+                         math.atan2(r[1, 0], r[0, 0])], dtype=np.float32)
+
+    def _scan(self):
+        """原生回放的高度图；LiDAR 学生按 10Hz 保持，确定性评测不带随机噪声。"""
+        if not self.scan_dim:
+            return None
+        if self.scan_cache is None or self.scan_step % self.scan_hold == 0:
+            s = self.state().copy()
+            pose = self._pose()
+            base = float(self.field.sample(torch.from_numpy(pose[None, :2])).item())
+            s[0] -= base  # TerrainField.scan 的 state[0] 是相对本地地面的机身高度
+            state, pose = torch.from_numpy(s[None]), torch.from_numpy(pose[None])
+            if self.scan_mode == 'true':
+                self.scan_cache = self.field.scan(state, pose)
+            else:
+                self.scan_cache = self.lidar.scan(self.field, state, pose, noise=False)
+        self.scan_step += 1
+        return self.scan_cache
+
     def _contact_state(self):
         force_by_body = {}
         wheels = np.zeros(4, dtype=bool)
@@ -207,7 +250,10 @@ class NativeGo2W:
 
     @torch.inference_mode()
     def step(self, command):
-        action = self.actor(self.observation(command))[0].numpy()
+        observation = self.observation(command)
+        scan = self._scan()
+        action = (self.actor(observation, scan=scan) if scan is not None
+                  else self.actor(observation))[0].numpy()
         if not np.isfinite(action).all():
             raise RuntimeError("策略动作出现非有限值")
         self.data.ctrl[self.actuators[:12]] = self.default[:12] + action[:12] * self.scales
@@ -395,6 +441,8 @@ def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_b
     metadata = {k: ckpt[k] for k in ("format", "step", "config", "history", "dt", "env_action_order")}
     metadata["actor_wheel_vel"] = False
     metadata["backend_package"] = package
+    metadata["scan_mode"] = ckpt.get('scan_mode') or ckpt.get('config', {}).get('scan', 'none')
+    metadata["actor_scan_dim"] = int(ckpt.get('actor_scan_dim') or 0)
     for name in ('robot_id', 'robot_signature'):
         if name in ckpt: metadata[name] = ckpt[name]
     del ckpt
@@ -404,7 +452,9 @@ def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_b
     args.output.mkdir(parents=True, exist_ok=False)
     report = dict(checkpoint=str(args.checkpoint), checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
                   model_step=metadata["step"], engine="MuJoCo native CPU", mujoco_version=mujoco.__version__,
-                  actor_observation=47 * metadata["history"], actor_action=12, policy_dt=metadata["dt"], observation_noise=False,
+                  actor_observation=47 * metadata["history"] + metadata.get("actor_scan_dim", 0),
+                  actor_action=12, policy_dt=metadata["dt"], observation_noise=False,
+                  scan_mode=metadata.get("scan_mode", "none"), scan_dim=metadata.get("actor_scan_dim", 0),
                   profile=args.profile, source=os.environ.get("GO2W_SOURCE", package), robot_id=metadata.get("robot_id", "go2w"),
                   speed=args.speed, seconds=args.seconds, seeds=args.seeds, trials=[])
     dump_json(args.output / "run.json", report)

@@ -35,32 +35,50 @@ class TerrainField:
 
   @classmethod
   def from_env(cls, env, resolution=.04):
+    """Build the static height atlas from an mjlab environment."""
+    return cls.from_model(env.sim.mj_model,
+                          set(env.scene["robot"].indexing.geom_ids.cpu().tolist()),
+                          resolution, device=env.device)
+
+  @classmethod
+  def from_model(cls, model, robot_ids, resolution=.04, bounds=None, device='cpu'):
     """Rasterize exact oriented boxes in small bounding rectangles, no per-pixel rays.
 
     Shared CPU build is ~6 MB at 4 cm for a 48 x 48 m atlas. No robot geometry.
-    Only these static box courses are supported; fail if new shapes are introduced.
+    Only static box courses are supported; planes are treated as z=0. Pass
+    ``bounds=((x0,y0),(x1,y1))`` for native test parks whose flat ground is a
+    plane outside the box bounding rectangle.
     """
     import mujoco
-    model = env.sim.mj_model
     data = mujoco.MjData(model)
     mujoco.mj_forward(model,data)
-    robot_ids = set(env.scene["robot"].indexing.geom_ids.cpu().tolist())
-    ids = [i for i in range(model.ngeom) if i not in robot_ids and model.geom_contype[i]]
     corners = np.array([[a,b,c] for a in (-1,1) for b in (-1,1) for c in (-1,1)])
     boxes=[]
-    for i in ids:
+    for i in range(model.ngeom):
+      if i in robot_ids or not model.geom_contype[i]:
+        continue
+      if model.geom_type[i] == mujoco.mjtGeom.mjGEOM_PLANE:
+        continue
       if model.geom_type[i] != mujoco.mjtGeom.mjGEOM_BOX:
         raise ValueError(f"Unsupported terrain geometry: {model.geom(i).name}")
       center, rot, size = data.geom_xpos[i],data.geom_xmat[i].reshape(3,3),model.geom_size[i]
       points = (corners*size) @ rot.T+center
       boxes.append((center.copy(),rot.copy(),size.copy(),points.min(0),points.max(0)))
-    lo=np.min([b[3][:2] for b in boxes],axis=0)-resolution
-    hi=np.max([b[4][:2] for b in boxes],axis=0)+resolution
+    if bounds is None:
+      if not boxes:
+        raise ValueError("Terrain field needs box geometry or explicit bounds")
+      lo=np.min([b[3][:2] for b in boxes],axis=0)-resolution
+      hi=np.max([b[4][:2] for b in boxes],axis=0)+resolution
+    else:
+      lo=np.asarray(bounds[0],dtype=np.float64)
+      hi=np.asarray(bounds[1],dtype=np.float64)
     shape=np.ceil((hi-lo)/resolution).astype(int)+1
     heights=np.zeros((shape[1],shape[0]),dtype=np.float32)
     for center,rot,size,low,high in boxes:
       start=np.maximum(0,np.floor((low[:2]-lo)/resolution).astype(int))
       end=np.minimum(shape,np.ceil((high[:2]-lo)/resolution).astype(int)+1)
+      if (end<=start).any():
+        continue
       xs=lo[0]+np.arange(start[0],end[0])*resolution
       ys=lo[1]+np.arange(start[1],end[1])*resolution
       x,y=np.meshgrid(xs,ys)
@@ -77,7 +95,7 @@ class TerrainField:
       surface=np.where(valid & (lower<=upper),upper,0)
       patch=heights[start[1]:end[1],start[0]:end[0]]
       np.maximum(patch,surface,out=patch)
-    return cls(torch.as_tensor(heights,device=env.device),tuple(lo),resolution)
+    return cls(torch.as_tensor(heights,device=device),tuple(lo),resolution)
 
 
 def advance_pose(pose, delta):

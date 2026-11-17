@@ -196,7 +196,7 @@ def run_one(sim, policy, ckpt, lane, seed, direction, seconds, speed, out_dir, w
     q_prev = sim.data.qpos[sim.qadr].copy()
     tau_prev = sim.data.actuator_force[sim.actuators].copy()
     action_prev = np.zeros(12, dtype=np.float32)
-    rows, obs_rows, records = [], [], []
+    rows, obs_rows, scan_rows, records = [], [], [], []
     stable, reason, success, t0 = 0., 'timeout', False, None
     active_seconds = 0.
     n_steps = round((seconds + 2.) / sim.dt)
@@ -213,6 +213,8 @@ def run_one(sim, policy, ckpt, lane, seed, direction, seconds, speed, out_dir, w
             active_seconds += sim.dt
             if write_obs:
                 obs_rows.append(sim.history.detach().cpu().numpy().reshape(-1).copy())
+            if getattr(sim, 'scan_dim', 0) and sim.scan_cache is not None:
+                scan_rows.append(sim.scan_cache.detach().cpu().numpy().reshape(-1).copy())
         q_prev = sim.data.qpos[sim.qadr].copy()
         tau_prev = sim.data.actuator_force[sim.actuators].copy()
         action_prev = sim.previous.copy()
@@ -240,6 +242,8 @@ def run_one(sim, policy, ckpt, lane, seed, direction, seconds, speed, out_dir, w
             writer.writeheader(); writer.writerows(flat)
         if write_obs:
             np.save(run_dir / 'observations.npy', np.stack(obs_rows))
+        if scan_rows:
+            np.save(run_dir / 'height_scan.npy', np.stack(scan_rows))
     v = np.array([[r['vx'], r['vy'], r['wz']] for r in rows] or [[0., 0., 0.]])
     foot_peak = np.array([r['foot_peak'].max() for r in records] or [0.])
     tau_abs = np.array([np.abs(r['tau']).max() for r in records] or [0.])
@@ -251,6 +255,8 @@ def run_one(sim, policy, ckpt, lane, seed, direction, seconds, speed, out_dir, w
         actual_mean=v.mean(0).tolist(), velocity_mae=np.abs(v - np.array(command)).mean(0).tolist(),
         rows=len(rows), foot_peak_max=float(foot_peak.max()), tau_abs_max=float(tau_abs.max()),
         csv=str(run_dir / 'trajectory.csv'), observations=str(run_dir / 'observations.npy') if write_obs else None,
+        height_scan=str(run_dir / 'height_scan.npy') if scan_rows else None,
+        scan_mode=getattr(sim, 'scan_mode', 'none'), scan_dim=int(getattr(sim, 'scan_dim', 0)),
         specification=sim.lane,
     )
     (run_dir / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2) + '\n')

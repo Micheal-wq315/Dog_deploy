@@ -147,3 +147,94 @@ model_40000~60000 正向卡 2.3/反向 9.59~9.83。退化发生在 **30k→40k**
 
 当前可用 **model_20000** 做正向/反向对照；下一版应从 model_20000 做
 Actor LR 地板、命令上限、前腿抬脚和完整往返消融，不要从 60k 单调续训。
+
+## 2026-11-17 Mid-360 局部高度图与教师-学生蒸馏
+
+### 观测与契约
+
+- **本体观测不变**：Actor 仍是 5 帧 × 47 = 235 维（无基座线速度、无力矩、无接触）。
+- **Actor 新增 273 维局部高度图**：带高度图的 Actor 输入 **235 + 273 = 508**；
+  Critic 仍为 331（36+3+7+12+273），世界模型仍为 340（36+7+12+12+273）。
+- **教师/学生同结构**：`core/policy.py:ScanActor` 保留盲策略的 235→256→128→64 主干，
+  另加 273→256→128→64 高度图编码器，拼接后输出 12 维残差；教师读真实
+  `TerrainField.scan`，学生读 Mid-360 模拟扫描。
+- **高度图网格**：与 `TerrainField.scan` 完全一致，**21×13=273**，机体 yaw 坐标，
+  x∈[-1,1] m、y∈[-0.6,0.6] m，4cm 全局地图上双线性采样；正数表示该格地面低于机身，
+  不是通用的“地面高度”，部署端必须保持同一符号约定。
+- **未知格**：填 **-2.0**（低于真实扫描的 ±1.5 范围）；`scan_with_mask` 同时返回
+  可见掩码，训练/记录只把高度值送进网络。
+
+### Mid-360 模拟
+
+`core/lidar.py:LidarHeightScan`，常量在 `robot/config.py:LIDAR`：
+
+| 项 | 默认值 | 说明 |
+|---|---|---|
+| `mount` | `(0, 0, 0.07)` m | base_link 上方 7cm、x/y 居中；实物必须一致 |
+| `tilt_deg` | `20`（下倾） | 有效机体垂直视场约 -27°~+32° |
+| `v_min_deg/v_max_deg` | `-7/52` | Mid-360 原始垂直视场 |
+| `range_min/range_max` | `0.15/40` m | 本地网格只需前 1.1m，远距不截断 |
+| `update_hz` | `10` | 50Hz 控制下每 5 步刷新，其余步保持 |
+| `noise_std/dropout` | `0.01m/5%` | 训练/带噪评测；确定性评测关闭随机项 |
+| `occlusion_samples` | `6` | 高度场射线步进，被更高地形挡住的格标为未知 |
+
+注意：0.16m 站高、雷达在 base 上方 7cm、下倾 20° 时，**机身附近约 0.4–0.5m 内是盲区**，
+近场格会大量填入 -2.0。这是真实 Mid-360 的几何限制，不是 bug；教师能看到这些格，
+学生必须靠本体历史/步态外推补足，正是蒸馏要学的部分。若实物把雷达装得更高/更前/
+下倾更多，只改 `LIDAR`，训练和部署两端必须同步。
+
+`LIDAR` 故意**不进入** `profile()/robot_signature`，所以旧盲策略 checkpoint 仍能加载；
+带高度图 checkpoint 额外保存 `lidar` 和 `lidar_signature`，改安装/视场/噪声后禁止静默续训。
+
+### 教师-学生训练
+
+1. **教师（特权）**：`./rl/scripts/train_digdog_scan_teacher.sh`
+   - 从 **model_20000** 热启动（`BASE=` 可换），Actor 主干和世界模型/Critic 原样恢复；
+     高度图分支初始为零输出，第一步动作与旧盲策略逐元素一致（实测最大差 0.0）。
+   - 默认 20000 轮，避开 30k→40k 的 Actor LR 地板/正向遗忘区间。
+2. **学生（LiDAR）**：`./rl/scripts/train_digdog_lidar_student.sh`
+   - 自动取最新教师 `model_*.pt`，或 `TEACHER=/绝对路径/model_xxxxx.pt` 指定。
+   - 学生从教师完整热启动，教师冻结；学生动作驱动世界模型，损失为
+     **RL 全回报 + `distill_coef` × BC(学生动作, 教师动作)**（默认 1.0）。
+   - LiDAR 高度图在真实环境按 10Hz 保持，在想象 rollout 中也按 `lidar_hold=5` 保持；
+     教师每个想象状态读真实扫描给出 BC 目标，学生只读 LiDAR 扫描。
+3. **续训**：教师用 `--resume <teacher model> --scan true`；学生用
+   `--resume <student model> --scan lidar --teacher <teacher>`，`--warm-start` 只用于新 run。
+
+### 代码改动
+
+- 新增 `core/lidar.py`、`ScanActor`、`Replay(scan=273)`、`Learner.warm_start/update_scan`。
+- `core/imagine.py`：`make_imagined_step/rollout` 支持 `scan_actor`、教师 BC、LiDAR 保持；
+  带高度图分支时禁用 `torch.compile`，走 eager。
+- `core/terrain.py`：抽出 `TerrainField.from_model(..., bounds=...)`，原生测试场把
+  plane 当作 z=0、box 作为障碍；训练环境的 `from_env` 行为不变。
+- `rl/scripts/digdog_mujoco.py`：原生回放自动识别 `scan_mode`，教师读真实扫描、
+  学生读确定性 LiDAR 扫描（保留视场/遮挡，不加随机噪声）；`record_test.py` 额外保存
+  `height_scan.npy [N,273]`。
+
+### 已验证（2026-11-17）
+
+- `ScanActor.from_blind(model_20000)` 的初始输出与旧盲策略**逐元素 0.0 差**；
+  高度图分支首步只更新末层，第二步起编码器/输出头均获得非零梯度，未出现零初始化死分支。
+- 8 环境 CPU 烟测：`--scan true` 教师、`--scan lidar` + 冻结教师学生均 3 轮完成，
+  WM/actor/critic loss 有限、0 跳过/0 无效复位；LiDAR 学生的 replay 增加 273 维扫描。
+- 原生 MuJoCo 平地短测可加载教师/学生 checkpoint；`record_test.py` 输出
+  `height_scan.npy (50,273)`、`observations.npy (50,235)`、`scan_mode=lidar`，
+  扫描值范围 -2.0~0.17。
+- 以上是**链路烟测**，不是能力结论；4096 环境正式教师/学生训练、12cm/16cm
+  与真实 Mid-360 部署尚待进行。
+
+### 待办 / 风险
+
+1. **实机安装外参**：确认 Mid-360 的实际 mount/tilt；如果装在头/背且倾角不同，
+   先改 `LIDAR` 再训练，不要拿默认 7cm/20° 的模型直接上真机。
+2. **真实高度图节点**：ROS2 侧需要订阅 Livox CustomMsg/PointCloud2，按 base TF 聚合到
+   21×13 局部网格、10Hz 发布，未知格 -2.0；ONNX 输入变为 508，部署 YAML 同步；
+   改完必须跑 `./rl/scripts/verify_contract.sh`。当前 `src/inference` 是轮足部署链路，
+   DigDog 的 ONNX/ROS2 推理节点仍需新建。
+3. **近场盲区**：如果实机近场任务（窄台阶、轮胎）依赖 0.5m 内高度，需提高安装高度/
+   下倾角、或加入里程计累积的局部地图；当前单帧高度图不解决。
+4. **教师回归**：教师仍沿用旧奖励/课程，30k 后可能重复正向 12cm 退化；默认只训 20k，
+   学生选教师时应结合 `record_test.py` 的正/反向 `max_x`，不要只看最后一步。
+5. **蒸馏权重**：`distill_coef=1.0` 是初值；若学生只会模仿教师、RL 跟踪变差，先降到
+   0.2–0.5；若 LiDAR 噪声下动作抖动，先加大 `noise_std/dropout` 或教师数据覆盖。

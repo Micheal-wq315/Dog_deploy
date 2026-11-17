@@ -425,6 +425,15 @@ journalctl --user -u rpwd-digdog-mjlab-60k-20261116.service -f
 # 全高度台阶键盘测试（4/6/8/10/12/16cm；自动取最新模型）
 ./rl/scripts/play_digdog_stairs.sh
 # 键位：1=flat 2=4cm 3=6cm 4=8cm 5=10cm 6=12cm 7=16cm 8=ramp
+
+# Mid-360 特权高度图教师（默认从 model_20000 热启动，20000轮）
+./rl/scripts/train_digdog_scan_teacher.sh
+# LiDAR 学生（默认取最新教师，冻结教师做 BC+RL，20000轮）
+TEACHER=/绝对路径/教师run/model_02000.pt ./rl/scripts/train_digdog_lidar_student.sh
+# 带高度图 checkpoint 的评测/键盘测试会自动识别 scan_mode（true/lidar）
+./rl/scripts/play_digdog_mjlab.sh --mode evaluate --checkpoint /绝对路径/model_xxxxx.pt \
+  --lanes flat stairs4 stairs8 stairs12 --speed .2 --seconds 55 --seeds 0 1 2
 ```
 
-适配细节、站姿/脚点常量和验证边界见 `rl/DIGDOG_MJLAB.md`。
+Mid-360 高度图契约、教师-学生训练、烟测结果和实机部署待办见 `rl/DIGDOG_MJLAB.md`；
+改高度图/观测后按项目约定跑 `./rl/scripts/verify_contract.sh`。

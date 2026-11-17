@@ -7,6 +7,7 @@ from torch import nn
 from .world_model import RunningNorm
 from .kinematics import feet_body
 from .gait import PointfootGaitReference
+from .terrain import SCAN_DIM
 from ..robot.config import rp_kinematic_constants,robot_signature,profile
 TERMS=(3,3,12,12,12,3,2)
 FRAME_DIM=sum(TERMS)
@@ -54,12 +55,78 @@ class Actor(Network):
   desired=(self.reference.actions(phase,command)+residual).clamp(-1,1)
   return (prev+self.rate*torch.tanh((desired-prev)/self.rate)).clamp(-1,1)
 
+class ScanActor(Actor):
+ """带 273 维局部高度图的策略。
+
+ 网络保留盲策略的 235→256→128→64 主干和原 ``net``（用于从旧 checkpoint
+ 无损热启动），额外加一个 273→...→64 的高度图编码器，再与主干特征拼接输出
+ 12 维残差。高度图编码器最后一层初始化为零、输出头的高度图半区初始化为很小
+ 随机数，因此从旧盲策略热启动时第一帧动作与旧策略完全一致，同时保留梯度通道；
+ 教师训练后再逐步学习使用高度图。教师和学生共用该结构，只是教师输入真实扫描、
+ 学生输入 Mid-360 扫描。
+ """
+
+ def __init__(self,history=5,hidden=(256,128,64),scan_dim=SCAN_DIM,scan_hidden=(256,128,64)):
+  super().__init__(history,hidden)
+  self.scan_dim=int(scan_dim);self.scan_hidden=tuple(scan_hidden)
+  self.scan_norm=RunningNorm(self.scan_dim)
+  layers=[];n=self.scan_dim
+  for width in self.scan_hidden:
+   layers.extend((nn.Linear(n,width),nn.ELU()));n=width
+  layers.append(nn.Linear(n,self.scan_hidden[-1]))
+  self.scan_net=nn.Sequential(*layers)
+  self.head=nn.Linear(hidden[-1]+self.scan_hidden[-1],12)
+  self._init_scan_head()
+
+ def _init_scan_head(self):
+  """精确复现盲策略的初始动作，同时给高度图分支留出学习通道。
+
+  scan_net 最后一层置零使初始高度图特征为零，因此初始动作与旧盲策略完全一致；
+  输出头的高度图半区用很小的随机数而不是全零，给 scan_net 末层提供非零梯度，
+  否则零初始化会让整个高度图分支永远收不到梯度。
+  """
+  old=self.net[-1]
+  with torch.no_grad():
+   self.head.weight.zero_()
+   self.head.weight[:,:old.in_features].copy_(old.weight)
+   self.head.weight[:,old.in_features:].uniform_(-.01,.01)
+   self.head.bias.copy_(old.bias)
+   self.scan_net[-1].weight.zero_()
+   self.scan_net[-1].bias.zero_()
+
+ @classmethod
+ def from_blind(cls,checkpoint,scan_dim=SCAN_DIM,scan_hidden=(256,128,64)):
+  """从旧 235 维盲策略热启动；新高度图分支初始为零输出。"""
+  actor=cls(checkpoint['history'],tuple(checkpoint['actor_hidden']),
+            scan_dim=scan_dim,scan_hidden=scan_hidden)
+  actor.load_state_dict(checkpoint['actor'],strict=False)
+  actor._init_scan_head()
+  return actor
+
+ def forward(self,obs,exploration=None,scan=None):
+  if scan is None:raise ValueError('ScanActor需要273维局部高度图')
+  if scan.shape[-1]!=self.scan_dim:raise ValueError(f'高度图维度应为{self.scan_dim}，实际{scan.shape[-1]}')
+  h=self.history;phase=safe_atan2(obs[:,-2],obs[:,-1])/(2*math.pi)
+  command=obs[:,-2*h-3:-2*h];prev=obs[:,42*h-12:42*h]
+  proprio=self.net[:-1](self.norm(obs))
+  height=self.scan_net(self.scan_norm(scan))
+  residual=self.residual_scale*self.head(torch.cat((proprio,height),-1)).tanh()
+  if exploration is not None:residual=residual+exploration
+  desired=(self.reference.actions(phase,command)+residual).clamp(-1,1)
+  return (prev+self.rate*torch.tanh((desired-prev)/self.rate)).clamp(-1,1)
+
+
 def checkpoint_wheel_vel(checkpoint):return False
 
 def load_actor(checkpoint,device='cpu'):
  if checkpoint.get('format') not in (POLICY_FORMAT,'rpwd-digdog-terrain-v1') or checkpoint.get('robot_id')!='rpwd_digdog':raise ValueError('不是新点足MuJoCo策略，禁止混用轮足或旧Isaac模型')
  if checkpoint.get('robot_signature')!=robot_signature():raise ValueError('点足资产/步态契约变化')
- actor=Actor(checkpoint['history'],checkpoint['actor_hidden']).to(device)
+ scan_dim=int(checkpoint.get('actor_scan_dim') or 0)
+ if scan_dim:
+  actor=ScanActor(checkpoint['history'],checkpoint['actor_hidden'],scan_dim=scan_dim,
+                  scan_hidden=tuple(checkpoint.get('actor_scan_hidden',(256,128,64)))).to(device)
+ else:
+  actor=Actor(checkpoint['history'],checkpoint['actor_hidden']).to(device)
  actor.load_state_dict(checkpoint['actor']);return actor.eval()
 
 def evaluation_env_cfg(checkpoint,level=0,kind=None):

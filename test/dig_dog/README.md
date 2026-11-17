@@ -32,6 +32,23 @@ python record_test.py \
 - 正向卡点都在 **x≈2.2–2.3 的第一级台阶**；20k/30k 的 `foot_peak` 约 111/132N，40k+ 约 93–97N，抬腿/足端撞击模式明显不同。
 - `success=false` 但 `max_x>7.5` 的 run 其实是越过终点的；成功锁定条件（≥2 足接触、0.15–0.70m 离地、竖直速度）对当前步态偏严，需和“能不能上去”分开看。
 
+## Mid-360 高度图模型（2026-11-17 起）
+
+`record_test.py` 会自动识别 checkpoint 的 `scan_mode`：
+
+- `scan_mode=none`：旧 235 维盲策略，不写 `height_scan.npy`；
+- `scan_mode=true`：特权教师，`height_scan.npy` 是真实 273 维高度扫描；
+- `scan_mode=lidar`：Mid-360 学生，`height_scan.npy` 是带视场/遮挡/噪声/丢点、未知格 -2.0 的 273 维局部高度图。
+
+```bash
+# 教师/学生都可直接记录；--no-obs 可关闭 235 维观测，高度图仍会保存
+python record_test.py \
+  --checkpoint /media/rmer/data/rpwd_training/digdog_mjlab/<run>/model_02000.pt \
+  --lanes stairs10 stairs12 --directions forward backward --seconds 50 --seeds 0
+```
+
+高度图按 10Hz 更新、保持 5 个控制步，`height_scan.npy` 与 `observations.npy` 逐行对齐。原生确定性回放不加随机噪声，但保留 Mid-360 的垂直视场（默认下倾 20°）和射线遮挡。
+
 ## 当前建议
 
 1. 需要正向 12cm 现在可用 **model_20000**（正向 9.99 / 反向 9.75）；model_30000 只适合正向。

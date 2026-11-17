@@ -12,9 +12,10 @@ from zoneinfo import ZoneInfo
 import torch
 
 from .bridge import Go2WBridge, pose_delta
-from ..robot.config import robot_signature
+from ..robot.config import robot_signature, LIDAR, lidar_signature
 from .world_model import Go2WWorldModel
-from .policy import Actor, Network, FRAME_DIM, CRITIC_DIM, POLICY_FORMAT, critic_input, checkpoint_wheel_vel
+from .policy import (Actor, ScanActor, Network, FRAME_DIM, CRITIC_DIM, SCAN_DIM,
+                     POLICY_FORMAT, critic_input, checkpoint_wheel_vel)
 from .replay import Replay
 from .imagine import frozen, rollout, make_imagined_step
 from .recovery import recover_invalid_envs
@@ -64,7 +65,17 @@ class Learner:
       self.model_class, self.format, extra = TerrainWorldModel, TERRAIN_FORMAT, SCAN_DIM
     self.model = self.model_class(tuple(args.wm_hidden), **(
       {"contacts":args.terrain_revision >= 4, "collisions":args.terrain_revision >= 7} if field is not None else {})).to(args.device)
-    self.actor = Actor(args.history, tuple(args.actor_hidden)).to(args.device)
+    self.scan_enabled = getattr(args, 'scan', 'none') != 'none'
+    scan_hidden = tuple(getattr(args, 'scan_hidden', (256, 128, 64)))
+    self.actor = (ScanActor(args.history, tuple(args.actor_hidden), scan_dim=SCAN_DIM,
+                            scan_hidden=scan_hidden) if self.scan_enabled
+                  else Actor(args.history, tuple(args.actor_hidden))).to(args.device)
+    self.teacher = None
+    self.lidar = None
+    self._lidar_cache = None
+    if getattr(args, 'scan', 'none') == 'lidar':
+      from .lidar import LidarHeightScan
+      self.lidar = LidarHeightScan()
     self.critic = Network(CRITIC_DIM + extra, 1, tuple(args.critic_hidden)).to(args.device)
     self.target = copy.deepcopy(self.critic)
     self.optimizers = [torch.optim.Adam(module.parameters(), lr=args.lr)
@@ -99,7 +110,15 @@ class Learner:
 
   def improve(self, seed, constants, weights, env_order, dt):
     args = self.args
-    if args.compile_imagination and self.imagined_step is None:
+    scan_actor = isinstance(self.actor, ScanActor)
+    scan_mode = getattr(args, 'scan', 'none')
+    lidar_hold = self.lidar.cfg.hold_steps(dt) if self.lidar is not None else 1
+    dist_coef = float(getattr(args, 'distill_coef', 0.)) if self.teacher is not None else 0.
+    scan_kwargs = dict(scan_actor=scan_actor, scan_mode=scan_mode,
+                       teacher=self.teacher, lidar=self.lidar,
+                       dist_coef=dist_coef, lidar_hold=lidar_hold)
+    # 教师/学生含高度图分支和 BC 损失，先走 eager；编译只保留给原盲策略。
+    if args.compile_imagination and self.imagined_step is None and not scan_actor:
       step = make_imagined_step(self.model,self.actor,constants,weights,env_order,
                                 dt=dt,field=self.field)
       self.imagined_step = torch.compile(step, backend="aot_eager", dynamic=False, fullgraph=True)
@@ -107,7 +126,7 @@ class Learner:
       actor_loss, inputs, targets = rollout(
         self.model, self.actor, self.target, seed, constants, weights, env_order,
         horizon=args.horizon, dt=dt, gamma=args.gamma, lam=args.lam, field=self.field,
-        step_fn=self.imagined_step)
+        step_fn=self.imagined_step, **scan_kwargs)
       ok=update(self.optimizers[1],actor_loss,self.actor.parameters(),args.actor_grad_clip_element)
       if not ok and self.imagined_step is not None:
         # 模型梯度算法不变；编译反传异常时用普通Torch重算同一批种子。
@@ -116,7 +135,8 @@ class Learner:
         args.compile_imagination=False
         print("编译想象反传异常，切换普通Torch并重算；保持完整模型梯度。",flush=True)
         actor_loss,inputs,targets=rollout(self.model,self.actor,self.target,seed,constants,weights,env_order,
-            horizon=args.horizon,dt=dt,gamma=args.gamma,lam=args.lam,field=self.field,step_fn=None)
+            horizon=args.horizon,dt=dt,gamma=args.gamma,lam=args.lam,field=self.field,step_fn=None,
+            **scan_kwargs)
         ok=update(self.optimizers[1],actor_loss,self.actor.parameters(),args.actor_grad_clip_element)
       if not ok:
         self.skipped_updates+=1;self.consecutive_actor_failures+=1
@@ -154,6 +174,10 @@ class Learner:
       "format": self.format, "step": step, "history": self.actor.history,
       "actor_wheel_vel": False,
       "actor_hidden": self.actor.hidden, "actor": self.actor.state_dict(),
+      "actor_scan_dim": int(getattr(self.actor, 'scan_dim', 0)),
+      "actor_scan_hidden": list(getattr(self.actor, 'scan_hidden', ())),
+      "scan_mode": getattr(self.args, 'scan', 'none'),
+      "lidar": dict(LIDAR), "lidar_signature": lidar_signature(),
       "world_model": self.model.checkpoint(), "critic": self.critic.state_dict(),
       "target_critic": self.target.state_dict(), "config": vars(self.args),
       "optimizers": [o.state_dict() for o in self.optimizers],
@@ -187,6 +211,14 @@ class Learner:
       raise ValueError("Checkpoint action order/control timestep differs from this environment")
     if ckpt["history"] != self.args.history:
       raise ValueError("Checkpoint observation history differs")
+    actor_scan_dim = int(ckpt.get("actor_scan_dim") or 0)
+    if actor_scan_dim != int(getattr(self.actor, "scan_dim", 0)):
+      raise ValueError("checkpoint 的高度图分支与本次 --scan 不一致；教师用 --warm-start，学生用同一 --scan 的 --resume")
+    if actor_scan_dim:
+      if ckpt.get("scan_mode") != getattr(self.args, "scan", "none"):
+        raise ValueError("checkpoint 的 scan 模式（true/lidar）不一致")
+      if ckpt.get("lidar_signature") != lidar_signature():
+        raise ValueError("LiDAR 安装/视场/噪声契约变化，禁止静默续训")
     if self.field is not None and ckpt["config"]["seed"] != self.args.seed:
       raise ValueError("Terrain resume requires the same terrain seed")
     if ckpt["config"].get("terrain_revision", 1) != getattr(self.args, "terrain_revision", 1):
@@ -208,6 +240,64 @@ class Learner:
     self.curriculum_state = ckpt.get("curriculum_state")
     self.env_steps = ckpt.get("env_steps", ckpt["step"] * ckpt["config"].get("num_steps_per_env", 1))
     return ckpt["step"]
+
+  def update_scan(self, field, state, pose, step, hold, reset=None):
+    """按 Mid-360 更新率保持 LiDAR 高度图；复位环境立即刷新。"""
+    if self.lidar is None:
+      raise ValueError("当前 run 不是 LiDAR 学生")
+    hold = max(1, int(hold))
+    refresh = self._lidar_cache is None or step % hold == 0
+    new = self.lidar.scan(field, state, pose, noise=True) if refresh or reset is not None else None
+    if self._lidar_cache is None:
+      self._lidar_cache = new
+    elif refresh:
+      self._lidar_cache = new
+    elif reset is not None and reset.any():
+      self._lidar_cache = torch.where(reset[:, None], new, self._lidar_cache)
+    return self._lidar_cache
+
+  def warm_start(self, path, env_order, dt):
+    """从旧盲策略或教师 checkpoint 热启动；不恢复旧优化器状态。
+
+    盲策略 -> ScanActor 时只搬运 235 维主干，高度图分支初始零输出，因此第一步
+    动作和旧策略完全一致。教师 -> 学生时完整加载 ScanActor、世界模型和 Critic，
+    学生再按 LiDAR 高度图继续训练。返回旧 checkpoint 的轮次仅用于日志。
+    """
+    ckpt = torch.load(path, map_location=self.args.device, weights_only=True)
+    if ckpt.get("robot_id") != self.args.robot:
+      raise ValueError("warm-start 机器人类型不匹配")
+    if ckpt.get("robot_signature") != robot_signature(self.args.robot):
+      raise ValueError("warm-start 机器人资产/步态契约变化")
+    if ckpt.get("format") not in (POLICY_FORMAT, self.format):
+      raise ValueError("warm-start 只接受 DigDog 策略 checkpoint")
+    if ckpt.get("history") != self.args.history:
+      raise ValueError("warm-start 观测历史长度不一致")
+    if ckpt.get("env_action_order") != list(env_order) or abs(ckpt.get("dt", 0.) - dt) > 1e-8:
+      raise ValueError("warm-start 动作顺序/控制周期不一致")
+    if checkpoint_wheel_vel(ckpt):
+      raise ValueError("warm-start 不接受轮速旧策略")
+    scan_dim = int(ckpt.get("actor_scan_dim") or 0)
+    if scan_dim:
+      if not isinstance(self.actor, ScanActor) or scan_dim != self.actor.scan_dim:
+        raise ValueError("warm-start 教师策略需要相同的 --scan 和高度图维度")
+      self.actor.load_state_dict(ckpt["actor"])
+    else:
+      if not isinstance(self.actor, ScanActor):
+        raise ValueError("warm-start 盲策略需要 --scan true 或 lidar 来创建高度图分支")
+      self.actor.load_state_dict(ckpt["actor"], strict=False)
+      self.actor._init_scan_head()
+    self.model.load_state_dict(self.model_class.from_checkpoint(ckpt["world_model"]).state_dict())
+    self.critic.load_state_dict(ckpt["critic"])
+    self.target.load_state_dict(ckpt["target_critic"])
+    self.terrain_state = ckpt.get("terrain_state")
+    self.curriculum_state = ckpt.get("curriculum_state")
+    self.policy_updates = 0
+    self.skipped_updates = 0
+    self.compiler_fallbacks = 0
+    self.invalid_env_resets = 0
+    self.env_steps = 0
+    self._lidar_cache = None
+    return int(ckpt.get("step", 0))
 
 
 def parser():
@@ -236,6 +326,16 @@ def parser():
                  help="2: larger leg actions; 3: bidirectional commands; 4: rolling rewards and 30cm stairs; 5: performance-gated stair curriculum; 6: wheel-local clearance; 7: v5 plus non-wheel collision termination; new run required")
   p.add_argument("--command-curriculum", action="store_true", help="Progressively widen velocity ranges")
   p.add_argument("--command-curriculum-start", type=int, default=0, help="Learner iteration where the velocity schedule starts; preserve on resume")
+  p.add_argument("--scan", choices=("none", "true", "lidar"), default="none",
+                 help="none: 235 维盲策略；true: 特权教师读取真实高度图；lidar: 学生读取 Mid-360 高度图")
+  p.add_argument("--scan-hidden", type=int, nargs="+", default=[256, 128, 64],
+                 help="高度图编码器隐藏层；默认与 235 维主干同宽")
+  p.add_argument("--warm-start", default="",
+                 help="从旧盲策略或教师 checkpoint 热启动；不恢复优化器/回放")
+  p.add_argument("--teacher", default="",
+                 help="LiDAR 学生蒸馏用的冻结教师 checkpoint（必须是 --scan true 训练出的策略）")
+  p.add_argument("--distill-coef", type=float, default=1.,
+                 help="学生动作与教师动作的 BC 损失系数；仅 --teacher 非空时生效")
   p.add_argument("--init-actor", default="", help="Initialize only the actor from a flat policy; dynamics/critic start fresh")
   p.add_argument("--promotion-window", type=int, default=256)
   p.add_argument("--promotion-min-trials", type=int, default=128)
@@ -256,7 +356,7 @@ def main():
   positive = (args.archive_size, args.critic_minibatches, args.lr_decay_iterations, args.num_steps_per_env, args.num_envs, args.iterations, args.buffer_len, args.history, args.wm_window,
               args.wm_batch, args.wm_updates, args.imag_batch, args.horizon, args.critic_epochs,
               args.save_interval, args.log_interval, *args.wm_hidden, *args.actor_hidden,
-              *args.critic_hidden)
+              *args.critic_hidden, *args.scan_hidden)
   if min(positive) < 1 or args.warmup < 0 or args.buffer_len < args.wm_window:
     p.error("Positive sizes required; buffer-len must be >= wm-window; warmup >= 0")
   if not (0 < args.gamma <= 1 and 0 <= args.lam <= 1 and args.lr > 0 and args.action_noise >= 0):
@@ -265,6 +365,16 @@ def main():
     p.error("Invalid actor learning-rate/gradient protection")
   if args.actor_hold_iterations < 0:
     p.error("actor-hold-iterations must be nonnegative")
+  if args.scan != 'none' and not args.terrain:
+    p.error("--scan true/lidar 需要 --terrain 高度场")
+  if args.teacher and args.scan != 'lidar':
+    p.error("--teacher 只用于 --scan lidar 学生蒸馏")
+  if args.scan == 'true' and args.teacher:
+    p.error("特权教师阶段不能指定 --teacher")
+  if args.distill_coef < 0:
+    p.error("--distill-coef 不能为负")
+  if args.warm_start and args.resume:
+    p.error("--warm-start 与 --resume 二选一")
   if args.terrain_revision >= 5 and (not args.command_curriculum or args.archive_size < 2):
     p.error("terrain v5 requires command-curriculum and archive-size >=2")
   if args.prioritized_replay and (not args.terrain or args.terrain_revision < 4):
@@ -307,6 +417,30 @@ def main():
     else:
       bridge = Go2WBridge(env)
     learner = Learner(args, field)
+    if args.warm_start:
+      old_step = learner.warm_start(args.warm_start, bridge.to_env, env.step_dt)
+      print(f"Warm start: {args.warm_start} (old step {old_step}); optimizers/replay fresh", flush=True)
+    if args.teacher:
+      ckpt = torch.load(args.teacher, map_location=args.device, weights_only=True)
+      if ckpt.get('robot_id') != args.robot or ckpt.get('robot_signature') != robot_signature(args.robot):
+        raise ValueError('teacher 机器人/资产契约不匹配')
+      if ckpt.get('history') != args.history:
+        raise ValueError('teacher 观测历史长度不一致')
+      if ckpt.get('env_action_order') != list(bridge.to_env) or abs(ckpt.get('dt', 0.) - env.step_dt) > 1e-8:
+        raise ValueError('teacher 动作顺序/控制周期不一致')
+      scan_dim = int(ckpt.get('actor_scan_dim') or 0)
+      if scan_dim != SCAN_DIM:
+        raise ValueError(f'teacher 必须是 {SCAN_DIM} 维高度图策略')
+      if ckpt.get('scan_mode') != 'true':
+        raise ValueError('teacher 必须使用真实高度图（scan_mode=true）')
+      teacher = ScanActor(ckpt['history'], ckpt['actor_hidden'], scan_dim=scan_dim,
+                          scan_hidden=tuple(ckpt.get('actor_scan_hidden', (256, 128, 64)))).to(args.device)
+      teacher.load_state_dict(ckpt['actor'])
+      teacher.eval()
+      for parameter in teacher.parameters():
+        parameter.requires_grad_(False)
+      learner.teacher = teacher
+      print(f"Frozen teacher: {args.teacher}", flush=True)
     if args.init_actor:
       ckpt = torch.load(args.init_actor, map_location=args.device, weights_only=True)
       if ckpt.get('robot_id', 'go2w') != args.robot:
@@ -325,7 +459,9 @@ def main():
     weights = {name: term.weight for name, term in cfg.rewards.items()}
     contact_targets = args.terrain and args.terrain_revision >= 4
     replay = Replay(args.buffer_len, args.num_envs, args.device, FRAME_DIM * args.history,
-                    terrain=args.terrain, contacts=contact_targets, courses=args.terrain_revision >= 5, collisions=args.terrain_revision >= 7)
+                    terrain=args.terrain, contacts=contact_targets, courses=args.terrain_revision >= 5,
+                    collisions=args.terrain_revision >= 7,
+                    scan=SCAN_DIM if args.scan == 'lidar' else 0)
     start = learner.load(args.resume, bridge.to_env, env.step_dt) if args.resume else 0
     if args.command_curriculum:
       set_command_stage(env.command_manager.get_term("twist").cfg,
@@ -363,7 +499,13 @@ def main():
     from ..robot.config import profile, REPO_ROOT
     import subprocess
     manifest = dict(display_name="大狗 DigDogv1 点足版", config=vars(args), robot=profile(args.robot), robot_signature=robot_signature(args.robot),
-                    actor_input=FRAME_DIM*args.history, actor_output=12, world_model_input=67+273 if args.terrain else 67,
+                    actor_input=FRAME_DIM*args.history + (SCAN_DIM if args.scan != 'none' else 0), actor_output=12,
+                    scan_mode=args.scan, scan_hidden=list(args.scan_hidden) if args.scan != 'none' else [],
+                    lidar=dict(LIDAR), lidar_signature=lidar_signature(),
+                    teacher=args.teacher, teacher_frozen=learner.teacher is not None,
+                    distill_coef=(args.distill_coef if learner.teacher is not None else 0.),
+                    warm_start=args.warm_start,
+                    world_model_input=67+273 if args.terrain else 67,
                     critic_input=CRITIC_DIM+273 if args.terrain else CRITIC_DIM, matmul_precision=torch.get_float32_matmul_precision(),
                     physics_dt=cfg.sim.mujoco.timestep, policy_dt=env.step_dt, curriculum_version='recent-v1',
                     weights=weights, resume_step=start,
@@ -377,6 +519,8 @@ def main():
     interval_steps = 0
     nonwheel_terminations = 0
     invalid_env_resets = learner.invalid_env_resets
+    scan_reset = torch.zeros(args.num_envs, dtype=torch.bool, device=args.device)
+    scan_hold = learner.lidar.cfg.hold_steps(env.step_dt) if learner.lidar is not None else 1
     from .gait import PointfootGaitMetrics
     gait_metrics=PointfootGaitMetrics(args.num_envs,args.device,env.step_dt)
     cpu_check=None
@@ -395,12 +539,22 @@ def main():
             state, pose, context = bridge.state(), bridge.pose(), bridge.context()
             command = env.command_manager.get_command("twist").clone()
             bias = bridge.robot.data.encoder_bias[:, bridge.legs].clone()
+            scan = None
+            if isinstance(learner.actor, ScanActor):
+              if args.scan == 'true':
+                scan = field.scan(state, pose)
+              else:
+                scan_step = learner.env_steps * args.num_steps_per_env + _
+                scan = learner.update_scan(field, state, pose, scan_step, scan_hold, reset=scan_reset)
+                scan_reset = torch.zeros_like(scan_reset)
+              learner.actor.scan_norm.update(scan)
             learner.actor.norm.update(history)
             learner.critic.norm.update(learner.critic_input(state, command, context, previous, pose))
             learner.target.norm.load_state_dict(learner.critic.norm.state_dict())
             ou = 0.95 * ou + (1 - 0.95**2)**0.5 * torch.randn_like(ou)
             noise_scale = args.action_noise * max(.15, 1. - (step+1)/12000.)
-            action = learner.actor(history, noise_scale * ou)
+            action = (learner.actor(history, noise_scale * ou, scan=scan)
+                      if scan is not None else learner.actor(history, noise_scale * ou))
             if args.terrain_revision >= 5:
               course_types = env.scene.terrain.terrain_types.clone()
               course_levels = env.scene.terrain.terrain_levels.clone()
@@ -408,6 +562,7 @@ def main():
             obs, real_reward, terminated, truncated, _ = env.step(bridge.env_action(action))
             terminated, truncated = terminated.clone(), truncated.clone()
             obs, bad = recover_invalid_envs(env, obs, real_reward)
+            scan_reset = bad.clone()
             invalid_env_resets += int(bad.sum())
             learner.invalid_env_resets=invalid_env_resets
             valid = ~(terminated | truncated | bad)
@@ -443,7 +598,8 @@ def main():
             replay.add(state=state, action=action, previous=previous, context=context,
                        next=nxt, pose=delta, valid=valid[:, None], history=history,
                        command=command, bias=bias, **({"world_pose": pose} if args.terrain else {}),
-                       **({"next_contacts":bridge.contacts()} if contact_targets else {}), **course_data)
+                       **({"next_contacts":bridge.contacts()} if contact_targets else {}),
+                       **({"scan_lidar": scan} if args.scan == 'lidar' else {}), **course_data)
             if valid.any():
               model_context = context if field is None else torch.cat((context, field.scan(state, pose)), -1)
               learner.model.update_stats(state[valid], action[valid], previous[valid], model_context[valid],

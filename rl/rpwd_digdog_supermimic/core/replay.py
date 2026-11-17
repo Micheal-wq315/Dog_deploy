@@ -5,7 +5,7 @@ from .world_model import STATE_DIM, ACTION_DIM, CONTEXT_DIM
 
 
 class Replay:
-  def __init__(self, length, num_envs, device, history_dim=0, terrain=False, contacts=False, courses=False, collisions=False):
+  def __init__(self, length, num_envs, device, history_dim=0, terrain=False, contacts=False, courses=False, collisions=False, scan=0):
     if min(length, num_envs) < 1:
       raise ValueError("Replay length and environment count must be positive")
     self.length, self.size, self.cursor = length, 0, 0
@@ -23,6 +23,8 @@ class Replay:
       dims["course"] = 4  # type, level, uphill ground transition, top crossing
     if history_dim:
       dims.update(history=history_dim, command=3, bias=12)
+    if scan:
+      dims["scan_lidar"] = scan  # 学生策略的 Mid-360 高度图，按控制步保存
     self.data = {k: torch.zeros(length, num_envs, dim, device=device) for k, dim in dims.items()}
 
   def add(self, **items):

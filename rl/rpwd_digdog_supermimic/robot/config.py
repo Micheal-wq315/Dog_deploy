@@ -46,6 +46,31 @@ FOOT_LOCAL = {
 }
 
 
+# Livox Mid-360 局部高度图契约。故意不放进 profile()/robot_signature：
+# 雷达是新增传感器，不能因为加它让已有盲策略 checkpoint 失效。
+# mount 为 base_link 坐标系（x 前、y 左、z 上，单位 m）；tilt_deg 为正表示下倾。
+# scan 网格与 TerrainField.scan 完全一致（21x13，x[-1,1]、y[-.6,.6]）。
+LIDAR = dict(
+    model='livox_mid360',
+    mount=(0.0, 0.0, 0.07),
+    tilt_deg=20.0,
+    v_min_deg=-7.0,
+    v_max_deg=52.0,
+    range_min=0.15,
+    range_max=40.0,
+    update_hz=10.0,
+    noise_std=0.01,
+    dropout=0.05,
+    unknown=-2.0,
+    occlusion_margin=0.01,
+    occlusion_samples=6,
+)
+
+
+def lidar_signature():
+    return hashlib.sha256(json.dumps(LIDAR, sort_keys=True).encode()).hexdigest()
+
+
 @dataclass(kw_only=True)
 class RobotEntityCfg(EntityCfg):
     robot_id: str = 'rpwd_digdog'

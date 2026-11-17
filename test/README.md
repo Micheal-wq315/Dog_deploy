@@ -16,7 +16,8 @@
 ```
 <lane>_seed<k>_<direction>/
   trajectory.csv        # 50Hz 逐控制步全量数据
-  observations.npy      # [N,235] Actor 历史观测（默认保存，可用 --no-obs 关闭）
+  observations.npy      # [N,235] Actor 本体历史观测（默认保存，可用 --no-obs 关闭）
+  height_scan.npy       # [N,273] 高度图策略的当前扫描（仅 --scan true/lidar 模型）
   summary.json          # 该次测试的汇总
 ```
 
@@ -33,7 +34,14 @@ run 级还有 `meta.json`、`summary.json`（所有 lane/seed/direction 汇总�
 
 ### summary.json 主要字段
 
-`lane/seed/direction/success/reason/measured_seconds/max_x/max_tilt/peak_nonwheel_force/actual_mean/velocity_mae/rows/foot_peak_max/tau_abs_max/specification`
+`lane/seed/direction/success/reason/measured_seconds/max_x/max_tilt/peak_nonwheel_force/actual_mean/velocity_mae/rows/foot_peak_max/tau_abs_max/height_scan/scan_mode/scan_dim/specification`
+
+### 高度图 / Mid-360 约定
+
+- 高度图网格与训练特权扫描完全一致：**21×13=273**，机体 yaw 坐标，x∈[-1,1]m、y∈[-0.6,0.6]m，正数表示该格地面低于机身。
+- 盲策略模型没有 `height_scan.npy`；`scan_mode=true` 是特权教师（真实高度场），`scan_mode=lidar` 是 Mid-360 学生（遮挡/视场/噪声/丢点，未知格 -2.0）。
+- LiDAR 高度图按 **10Hz** 更新并保持 5 个 50Hz 控制步，所以相邻 CSV 行的扫描可能重复；`height_scan.npy` 与 `observations.npy` 逐行对齐。
+- 原生回放的确定性评测使用 `noise=False`：仍保留视场和射线遮挡，但不加随机测距噪声/丢点；训练时打开噪声。
 
 ## 重要约定
 
