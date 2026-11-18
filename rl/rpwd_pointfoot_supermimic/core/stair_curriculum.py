@@ -22,6 +22,8 @@ def buffers(env):
     env._stair_recent = torch.zeros(len(HEIGHTS) - 2, window, dtype=torch.uint8, device=env.device)
     env._stair_recent_count = torch.zeros(len(HEIGHTS) - 2, dtype=torch.long, device=env.device)
     env._stair_episode_stage = torch.full((env.num_envs,), getattr(env, '_stair_stage', 0), dtype=torch.long, device=env.device)
+  if not hasattr(env, '_surface_best_x'):
+    env._surface_best_x = torch.zeros(env.num_envs, device=env.device)
   return env._stair_stats
 
 
@@ -62,6 +64,31 @@ def mark_surface_reached(env, env_ids=None):
   env._surface_reached |= reached
 
 
+def surface_stall(env):
+  """stones/tires 在前进指令下 3 秒没有 +0.1m 进展即判失败。
+
+  旧行为是等 35 秒超时，超时不计 pass/fall，策略学会站在 1.2m 小岛上拖时间；
+  现在把它作为真正的失败终止，配合速度跟踪门控，逼迫机器人继续上桩。
+  """
+  buffers(env)
+  types = env.scene.terrain.terrain_types
+  surface = (types == 6) | (types == 7)
+  offset = env.scene['robot'].data.root_link_pos_w - env.scene.env_origins
+  progress = offset[:, 0].abs()
+  improve = progress > env._surface_best_x + .1
+  env._surface_best_x = torch.where(improve, progress, env._surface_best_x)
+  command = env.command_manager.get_command('twist')
+  moving = command[:, 0].abs() > .1
+  active = env.episode_length_buf > 0
+  env._stair_stall_time = torch.where(
+      surface & moving & active & ~improve,
+      env._stair_stall_time + env.step_dt,
+      torch.zeros_like(env._stair_stall_time))
+  stuck = surface & moving & active & (env._stair_stall_time > 3.)
+  env._stair_stuck = stuck
+  return stuck
+
+
 def curriculum(env, env_ids):
   stats = buffers(env)
   terrain = env.scene.terrain
@@ -96,7 +123,7 @@ def curriculum(env, env_ids):
   # stones/tires 回合诊断：终点 x、on_top 比例、掉落/出口/超时分类。累计值
   # 只用于日志，不进入观测；train.py 的 terrain_details 会把它写进 metrics。
   if not hasattr(env, '_surface_diag'):
-    env._surface_diag = torch.zeros(2, 6, device=env.device)
+    env._surface_diag = torch.zeros(2, 7, device=env.device)
   exited = (offset[:, 0].abs() > 6.5) | (offset[:, 1].abs() > 6.5)
   for index, kind in enumerate((6, 7)):
     selected = (types == kind) & active
@@ -109,6 +136,7 @@ def curriculum(env, env_ids):
     diag[3] += fallen[selected].sum()
     diag[4] += exited[selected].sum()
     diag[5] += (~fallen[selected] & ~exited[selected]).sum()
+    diag[6] += env._stair_stuck[selected].sum()
   direction=offset[:,0].sign()
   rear_clear=(feet[:,:,0]*direction[:,None]).amin(-1)>2.65
   top=top & rear_clear
@@ -130,6 +158,7 @@ def curriculum(env, env_ids):
   env._stair_episode_stage[env_ids] = getattr(env, '_stair_stage', 0)
   env._stair_stall_time[env_ids] = 0
   env._stair_stuck[env_ids] = False
+  env._surface_best_x[env_ids] = 0
   return terrain.terrain_levels.float().mean()
 
 
@@ -217,10 +246,11 @@ def summary(env):
     selected = levels[types == i]
     result[name] = dict(level_counts=torch.bincount(selected, minlength=len(HEIGHTS)).cpu().tolist(),
                        episodes_by_level=stats[i])
-  diag = env._surface_diag.detach().cpu().tolist() if hasattr(env, '_surface_diag') else [[0.] * 6] * 2
+  diag = env._surface_diag.detach().cpu().tolist() if hasattr(env, '_surface_diag') else [[0.] * 7] * 2
   result['surface_diag'] = {
       name: dict(trials=diag[i][0], end_x_mean=diag[i][1] / max(diag[i][0], 1.),
                  on_top_mean=diag[i][2] / max(diag[i][0], 1.),
-                 fall=diag[i][3], exit=diag[i][4], timeout=diag[i][5])
+                 fall=diag[i][3], exit=diag[i][4], timeout=diag[i][5],
+                 stall=diag[i][6])
       for i, name in enumerate(('stones', 'tires'))}
   return result

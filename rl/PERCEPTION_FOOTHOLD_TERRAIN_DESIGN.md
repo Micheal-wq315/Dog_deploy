@@ -214,3 +214,11 @@
 - 诊断：`stair_curriculum` 增加 stones/tires 的终点 x、on_top 比例、掉落/出口/超时分类，写入 metrics 的 `terrain_details.surface_diag`。
 - 验证：8 环境小岛中心 0m、第一排桩 .02m、坑底在 scan 中可见（最大 1.375m）、step 事件 latch 正常、py_compile 通过。
 - 训练：从 `model_13500` 热启动、3072 环境、40000 轮。
+
+### 10.5 停留终止与速度跟踪门控（2026-11-19）
+
+- v2 在 7.8k 时 stones 仍 0 pass：累计 932 回合，401 掉坑/520 超时/11 出口，`end_x 0.186`、`on_top 0.111`；策略学会站在 1.2m 小岛上拖 35 秒超时。
+- 停留终止：新增 `surface_stall` 终止项，stones/tires 在前进指令（`|vx|>0.1`）下 3 秒没有 +0.1m x 进展即判失败（`time_out=False`），不再等 35 秒超时；复用 `_stair_stall_time/_stair_stuck`，新增 `_surface_best_x`；`surface_diag` 增加 `stall` 计数。
+- 速度跟踪门控：`surface_gate = 1 - 0.8*active*(1-on_top_frac)`，stones/tires 在平地/小岛上只能拿 20% 的线性/角速度跟踪奖励，脚真正上桩顶/胎面才恢复 100%。
+- 验证：8 环境 stones 原地 150 次调用后 `stall_time 3.02s`、`stuck=True`；tires 环境因当前指令非前进未触发；`surface_diag` 带 `stall` 字段；`py_compile` 通过。
+- 训练：从 v2 `model_7500` 热启动、3072 环境、40000 轮。

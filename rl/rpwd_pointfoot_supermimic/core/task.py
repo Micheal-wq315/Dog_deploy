@@ -38,6 +38,9 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
  # 过桩进度/绕行惩罚：只有脚真正落在桩顶/胎面时前进才加分；在中央小岛或
  # 两侧平地上前进会被扣分，避免策略靠拖时间/绕行拿速度跟踪奖励。
  on_top_frac=on_top.mean(-1)
+ # stones/tires 的速度跟踪按 on_top 门控：站在小岛/平地上只能拿 20%，
+ # 脚真正上桩/上胎面才恢复到 100%，避免“站着拖时间”也能刷速度奖励。
+ surface_gate=1.-.8*active*(1.-on_top_frac)
  # 前方多点查障碍，只用于训练奖励；Actor不读取地形。
  speed=(command[:,:2].square().sum(-1)+1e-8).sqrt().clamp_min(.05)
  direction=command[:,:2]/speed[:,None]
@@ -62,8 +65,8 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
  surface_progress=forward.clamp(0,.6)*active*on_top_frac
  surface_bypass=forward.clamp(0,.6)*active*(1-on_top_frac)
  return dict(
-  track_linear_velocity=torch.exp(-(state[:,4:6]-command[:,:2]).square().sum(-1)/.09),
-  track_angular_velocity=torch.exp(-(state[:,9]-command[:,2]).square()/.09),
+  track_linear_velocity=torch.exp(-(state[:,4:6]-command[:,:2]).square().sum(-1)/.09)*surface_gate,
+  track_angular_velocity=torch.exp(-(state[:,9]-command[:,2]).square()/.09)*surface_gate,
   upright=torch.exp(-state[:,1:3].square().sum(-1)/.5**2),
   standstill=(command.square().sum(-1)<1e-6).float()*(state[:,4:10].square().sum(-1)+.01*state[:,22:34].square().sum(-1)),
   action_rate_l2=(action-previous).square().sum(-1),dof_pos_limits=violation,terminated=1-survival_prob,
