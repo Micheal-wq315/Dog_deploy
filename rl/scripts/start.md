@@ -397,11 +397,13 @@ cd /media/rmer/系统/rpwd_training/worktrees/rpwd-pointfoot-mjlab
 ./rl/scripts/run_pointfoot_mjlab_experiment.sh
 # 最新正式点足模型，方向键平移、Q/E转向，松键归零。
 ./rl/scripts/play_pointfoot_mjlab.sh --lane stairs4 --speed .2
+# 508维新模型 + 高程显示：H切换3D scan点；--scan-heatmap开2D地面高度热力图。
+./rl/scripts/play_pointfoot_mjlab.sh --checkpoint /绝对路径/model_xxxxx.pt --lane stones --scan-heatmap
 # 完整恢复新点足检查点；总目标60000轮。
 ./rl/scripts/train_pointfoot_mjlab.sh --resume /绝对路径/model_20000.pt --iterations 60000
 ```
 
-新点足235→12接口，不能加载旧Isaac点足或轮足模型。配置、课程、验收和稳定反传说明见 `rl/RPWD_POINTFOOT_MJLAB.md`。
+新点足235/508→12接口（508=235本体+273真值高度图），不能加载旧Isaac点足或轮足模型；508模型在原生测试场自动计算高度图。配置、课程、验收和稳定反传说明见 `rl/RPWD_POINTFOOT_MJLAB.md`。
 
 ## 大狗 DigDogv1（新 MJCF，1.25Hz）
 

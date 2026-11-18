@@ -89,7 +89,7 @@ class NativeGo2W:
         LEG_JOINT_NAMES, WHEEL_JOINT_NAMES = robot_config.LEG_JOINT_NAMES, robot_config.WHEEL_JOINT_NAMES
         self.robot_id = checkpoint.get('robot_id', 'go2w')
         if checkpoint_wheel_vel(checkpoint) or checkpoint["config"].get("terrain_revision") != 7:
-            raise ValueError("当前原生适配器只接受新点足235维Actor")
+            raise ValueError("当前原生适配器只接受新点足235/508维Actor")
         self.checkpoint, self.actor, self.seed = checkpoint, actor, seed
         self.cfg = evaluation_env_cfg(checkpoint, 0, "flat")
         self.cfg.scene.num_envs = 1
@@ -138,6 +138,14 @@ class NativeGo2W:
                                     for i in range(self.model.ngeom)])
         self.wheel_geom = {self.model.geom(f"robot/{leg}_foot_collision").id: i
                            for i, leg in enumerate(("FL", "FR", "RL", "RR"))}
+        # 273维真值高度图：与训练一致，机体 yaw 坐标系 21×13（x±1m, y±0.6m）。
+        gx, gy = np.meshgrid(np.linspace(-1., 1., 21), np.linspace(-.6, .6, 13), indexing="ij")
+        self.scan_offsets = np.stack((gx.flatten(), gy.flatten()), -1)
+        self.scan_shape = (21, 13)
+        self.scan_dim = int(getattr(actor, "scan_dim", 0) or 0)
+        self.last_scan = None
+        self.scan_world = None
+        self.scan_show = True
         self.reset("stairs8")
 
     def reset(self, lane, seed=0):
@@ -152,6 +160,8 @@ class NativeGo2W:
             self.data.qpos[3:7] = (math.cos(yaw / 2), 0, 0, math.sin(yaw / 2))
         self.previous = np.zeros(12, dtype=np.float32)
         self.history = None
+        self.last_scan = None
+        self.scan_world = None
         self.data.ctrl[self.actuators[:12]] = self.default[:12]
         self.data.ctrl[self.actuators[12:]] = 0.
         self.peak_nonwheel, self.contacts = 0., np.zeros(4, dtype=bool)
@@ -164,6 +174,22 @@ class NativeGo2W:
                                r.T @ self.data.qvel[:3], self.data.qvel[3:6],
                                self.data.qpos[self.qadr[:12]] - self.default[:12],
                                self.data.qvel[self.vadr[:12]], np.array([math.sin(2*math.pi*1.5*self.data.time),math.cos(2*math.pi*1.5*self.data.time)]))).astype(np.float32)
+
+    def scan(self):
+        """按训练契约计算273维局部高度图；旧235维Actor返回None。"""
+        if not self.scan_dim:
+            return None
+        r = self.data.xmat[self.base].reshape(3, 3)
+        yaw = math.atan2(r[1, 0], r[0, 0])
+        c, s = math.cos(yaw), math.sin(yaw)
+        ox, oy = self.scan_offsets[:, 0], self.scan_offsets[:, 1]
+        x, y = self.data.qpos[:2]
+        wx, wy = x + c * ox - s * oy, y + s * ox + c * oy
+        h = np.array([terrain_height(self.model, self.data, float(a), float(b))
+                      for a, b in zip(wx, wy)], dtype=np.float32)
+        scan = np.clip(float(self.data.qpos[2]) - h, -1.5, 1.5).astype(np.float32)
+        self.last_scan, self.scan_world = scan, np.stack((wx, wy, h), -1)
+        return torch.from_numpy(scan[None])
 
     def observation(self, command):
         frame, push_history, TERMS = self.policy.frame, self.policy.push_history, self.policy.TERMS
@@ -206,7 +232,9 @@ class NativeGo2W:
 
     @torch.inference_mode()
     def step(self, command):
-        action = self.actor(self.observation(command))[0].numpy()
+        observation = self.observation(command)
+        scan = self.scan()
+        action = (self.actor(observation, scan=scan) if scan is not None else self.actor(observation))[0].numpy()
         if not np.isfinite(action).all():
             raise RuntimeError("策略动作出现非有限值")
         self.data.ctrl[self.actuators[:12]] = self.default[:12] + action[:12] * self.scales
@@ -314,6 +342,40 @@ def evaluate(args, checkpoint, actor, report):
             print("[能力测试] " + json.dumps(result, ensure_ascii=False), flush=True)
 
 
+def _draw_scan(viewer, sim):
+    """在查看器里用彩色小方块叠加273个scan点；红色=高地面，蓝色=低地面。"""
+    scn = viewer.user_scn
+    scn.ngeom = 0
+    if not sim.scan_show or sim.scan_world is None:
+        return
+    for x, y, h in sim.scan_world:
+        t = float(np.clip(h / .55, 0., 1.))
+        geom = scn.geoms[scn.ngeom]
+        mujoco.mjv_initGeom(geom, mujoco.mjtGeom.mjGEOM_BOX,
+                            np.array((.012, .012, .004)),
+                            np.array((x, y, h + .006)),
+                            np.eye(3).reshape(-1),
+                            np.array((t, .15, 1. - t, .75), dtype=np.float32))
+        scn.ngeom += 1
+
+
+def _show_heatmap(sim, enabled):
+    """可选2D高程热力图；方向为机体系 x向右、y向上。"""
+    if not enabled or not sim.scan_show or sim.last_scan is None:
+        return
+    import cv2
+    h = (float(sim.data.qpos[2]) - sim.last_scan).reshape(sim.scan_shape).T
+    image = np.uint8(np.clip(h / .55, 0., 1.) * 255)
+    image = cv2.applyColorMap(cv2.resize(image, (21 * 18, 13 * 18),
+                                         interpolation=cv2.INTER_NEAREST), cv2.COLORMAP_TURBO)
+    cv2.putText(image, f"ground height  min {h.min():.2f}  max {h.max():.2f}  mean {h.mean():.2f}",
+                (8, 22), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(image, "x -> right   y -> up", (8, image.shape[0] - 8),
+                cv2.FONT_HERSHEY_SIMPLEX, .45, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.imshow("height scan (body frame)", image)
+    cv2.waitKey(1)
+
+
 def play(sim, args):
     import mujoco.viewer
     commands = np.zeros(3)
@@ -325,7 +387,7 @@ def play(sim, args):
         viewer.cam.trackbodyid = sim.base
         viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 2.8, 135, -25
         print(f"[就绪] 官方MuJoCo查看器，模型第{sim.checkpoint['step']}轮，场景{args.lane}", flush=True)
-        print("按住方向键前后/横移，Q/E转向，松开归零；Space停止；R复位；1..8切赛道；K暂停；Esc退出", flush=True)
+        print("按住方向键前后/横移，Q/E转向，松开归零；Space停止；R复位；1..8切赛道；K暂停；H高程显示；Esc退出", flush=True)
         paused = False
         while viewer.is_running():
             began = time.monotonic()
@@ -354,23 +416,36 @@ def play(sim, args):
                     viewer.opt.geomgroup[3] = False
                 elif key == ord("K"):
                     paused = not paused
+                elif key == ord("H"):
+                    sim.scan_show = not sim.scan_show
             commands[:] = keyboard.command() if not paused else 0.
             row = sim.measure(commands) if paused else sim.step(commands)
             if not row["finite"]:
                 commands[:] = 0.
                 paused = True
+            scan_text = ""
+            if sim.last_scan is not None:
+                h = float(sim.data.qpos[2]) - sim.last_scan
+                scan_text = (f"scan h {h.min():.2f}/{h.max():.2f}/{h.mean():.2f}m | "
+                             f"H {'on' if sim.scan_show else 'off'}\n")
             viewer.set_texts((mujoco.mjtFontScale.mjFONTSCALE_100, mujoco.mjtGridPos.mjGRID_TOPLEFT,
                              f"{sim.robot_id.upper()} {sim.checkpoint['step']} | {sim.lane['name']} | CPU native\n"
                              "Hold Arrows: vx/vy | Q/E: yaw | Release: stop\nSpace stop  R reset\n"
                              "1 Flat  2 Stairs4  3 Stairs6  4 Stairs8\n"
                              "5 Stairs10  6 Stairs12  7 Stairs16  8 Ramp\n"
-                             "9 Stones  0 Tires\nK pause  Esc exit\n"
+                             "9 Stones  0 Tires\nK pause  H scan  Esc exit\n"
                              f"cmd {commands.round(2)} | vx {row['vx']:.2f} | tilt {row['tilt_degrees']:.1f}\n"
-                             f"support {row['wheel_contacts']} | nonwheel {row['nonwheel_force']:.1f}N"
-                             + (" | PAUSED" if paused else ""), ""))
+                             f"support {row['wheel_contacts']} | nonwheel {row['nonwheel_force']:.1f}N\n"
+                             + scan_text
+                             + ("PAUSED" if paused else ""), ""))
+            _draw_scan(viewer, sim)
+            _show_heatmap(sim, args.scan_heatmap)
             viewer.sync()
             time.sleep(max(0., sim.dt - (time.monotonic() - began)))
     keyboard.close()
+    if args.scan_heatmap:
+        import cv2
+        cv2.destroyAllWindows()
 
 
 def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_backend=None):
@@ -385,6 +460,8 @@ def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_b
     p.add_argument("--speed", type=float, default=.3)
     p.add_argument("--lateral-speed", type=float, default=.2)
     p.add_argument("--turn-speed", type=float, default=.5)
+    p.add_argument("--scan-heatmap", action="store_true",
+                   help="键盘测试时额外打开21×13高程热力图窗口")
     p.add_argument("--output", type=Path)
     args = p.parse_args()
     if not math.isfinite(args.seconds) or args.seconds <= 0 or not 0 < args.speed <= .6:
@@ -400,6 +477,8 @@ def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_b
     actor = importlib.import_module(package + '.core.policy').load_actor(ckpt, 'cpu')
     metadata = {k: ckpt[k] for k in ("format", "step", "config", "history", "dt", "env_action_order")}
     metadata["actor_wheel_vel"] = False
+    metadata["actor_scan_dim"] = int(ckpt.get("actor_scan_dim") or 0)
+    metadata["actor_scan_hidden"] = ckpt.get("actor_scan_hidden")
     metadata["backend_package"] = package
     for name in ('robot_id', 'robot_signature'):
         if name in ckpt: metadata[name] = ckpt[name]
@@ -410,7 +489,8 @@ def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_b
     args.output.mkdir(parents=True, exist_ok=False)
     report = dict(checkpoint=str(args.checkpoint), checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
                   model_step=metadata["step"], engine="MuJoCo native CPU", mujoco_version=mujoco.__version__,
-                  actor_observation=47 * metadata["history"], actor_action=12, policy_dt=metadata["dt"], observation_noise=False,
+                  actor_observation=47 * metadata["history"] + metadata["actor_scan_dim"],
+                  actor_action=12, policy_dt=metadata["dt"], observation_noise=False,
                   profile=args.profile, source=os.environ.get("GO2W_SOURCE", package), robot_id=metadata.get("robot_id", "go2w"),
                   speed=args.speed, seconds=args.seconds, seeds=args.seeds, trials=[])
     dump_json(args.output / "run.json", report)
