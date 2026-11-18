@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import torch
 from torch import nn
 from .world_model import RunningNorm
+from .terrain import SCAN_DIM
 from .kinematics import feet_body
 from .gait import PointfootGaitReference
 from ..robot.config import rp_kinematic_constants,robot_signature,profile
@@ -54,12 +55,63 @@ class Actor(Network):
   desired=(self.reference.actions(phase,command)+residual).clamp(-1,1)
   return (prev+self.rate*torch.tanh((desired-prev)/self.rate)).clamp(-1,1)
 
+class ScanActor(Actor):
+ """带273维局部高度图的点足策略；保留原235→...主干，额外高度图编码器。"""
+ def __init__(self,history=5,hidden=(256,128,64),scan_dim=SCAN_DIM,scan_hidden=(256,128,64)):
+  super().__init__(history,hidden)
+  self.scan_dim=int(scan_dim);self.scan_hidden=tuple(scan_hidden)
+  self.scan_norm=RunningNorm(self.scan_dim)
+  layers=[];n=self.scan_dim
+  for width in self.scan_hidden:
+   layers.extend((nn.Linear(n,width),nn.ELU()));n=width
+  layers.append(nn.Linear(n,self.scan_hidden[-1]))
+  self.scan_net=nn.Sequential(*layers)
+  self.head=nn.Linear(hidden[-1]+self.scan_hidden[-1],12)
+  self._init_scan_head()
+
+ def _init_scan_head(self):
+  """盲策略主干+零输出高度图分支，保证热启动首帧动作与旧模型一致。"""
+  old=self.net[-1]
+  with torch.no_grad():
+   self.head.weight.zero_()
+   self.head.weight[:,:old.in_features].copy_(old.weight)
+   self.head.weight[:,old.in_features:].uniform_(-.01,.01)
+   self.head.bias.copy_(old.bias)
+   self.scan_net[-1].weight.zero_()
+   self.scan_net[-1].bias.zero_()
+
+ @classmethod
+ def from_blind(cls,checkpoint,scan_dim=SCAN_DIM,scan_hidden=(256,128,64)):
+  actor=cls(checkpoint['history'],tuple(checkpoint['actor_hidden']),
+            scan_dim=scan_dim,scan_hidden=scan_hidden)
+  actor.load_state_dict(checkpoint['actor'],strict=False)
+  actor._init_scan_head()
+  return actor
+
+ def forward(self,obs,exploration=None,scan=None):
+  if scan is None:raise ValueError('ScanActor需要273维局部高度图')
+  if scan.shape[-1]!=self.scan_dim:raise ValueError(f'高度图维度应为{self.scan_dim}，实际{scan.shape[-1]}')
+  h=self.history;phase=safe_atan2(obs[:,-2],obs[:,-1])/(2*math.pi)
+  command=obs[:,-2*h-3:-2*h];prev=obs[:,42*h-12:42*h]
+  proprio=self.net[:-1](self.norm(obs))
+  height=self.scan_net(self.scan_norm(scan))
+  residual=self.residual_scale*self.head(torch.cat((proprio,height),-1)).tanh()
+  if exploration is not None:residual=residual+exploration
+  desired=(self.reference.actions(phase,command)+residual).clamp(-1,1)
+  return (prev+self.rate*torch.tanh((desired-prev)/self.rate)).clamp(-1,1)
+
+
 def checkpoint_wheel_vel(checkpoint):return False
 
 def load_actor(checkpoint,device='cpu'):
  if checkpoint.get('format') not in (POLICY_FORMAT,'rpwd-pointfoot-terrain-v1') or checkpoint.get('robot_id')!='rpwd_pointfoot':raise ValueError('不是新点足MuJoCo策略，禁止混用轮足或旧Isaac模型')
  if checkpoint.get('robot_signature')!=robot_signature():raise ValueError('点足资产/步态契约变化')
- actor=Actor(checkpoint['history'],checkpoint['actor_hidden']).to(device)
+ scan_dim=int(checkpoint.get('actor_scan_dim') or 0)
+ if scan_dim:
+  actor=ScanActor(checkpoint['history'],checkpoint['actor_hidden'],scan_dim=scan_dim,
+                  scan_hidden=tuple(checkpoint.get('actor_scan_hidden',(256,128,64)))).to(device)
+ else:
+  actor=Actor(checkpoint['history'],checkpoint['actor_hidden']).to(device)
  actor.load_state_dict(checkpoint['actor']);return actor.eval()
 
 def evaluation_env_cfg(checkpoint,level=0,kind=None):

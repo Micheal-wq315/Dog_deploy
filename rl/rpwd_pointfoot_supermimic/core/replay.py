@@ -15,6 +15,7 @@ class Replay:
                 context=CONTEXT_DIM, next=STATE_DIM, pose=3, valid=1)
     if terrain:
       dims["world_pose"] = 3
+      dims["kind"] = 1  # 地形类型，用于只在桩阵/胎环上启用落脚奖励
     if contacts:
       dims["next_contacts"] = 16
     if collisions:

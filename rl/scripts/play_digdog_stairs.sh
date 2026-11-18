@@ -6,7 +6,9 @@ source "$SCRIPT_DIR/digdog_mjlab_common.sh"
 if [[ -n "${1:-}" ]]; then
   CKPT="$1"
 else
-  CKPT="$(ls -t "$DIGDOG_MJLAB_DATA"/*/model_*.pt 2>/dev/null | head -1)"
+  # 不自动选 LiDAR 学生的早期 checkpoint（自动接力可能留下未收敛存档）；
+  # 要测学生必须显式传路径。
+  CKPT="$(ls -t "$DIGDOG_MJLAB_DATA"/*/model_*.pt 2>/dev/null | grep -v '_digdog_lidar_student/' | head -1)"
 fi
 [[ -f "$CKPT" ]] || { echo "找不到模型：$CKPT" >&2; exit 1; }
 echo "模型: $CKPT"

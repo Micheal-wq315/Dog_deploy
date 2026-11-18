@@ -96,7 +96,8 @@ class NativeGo2W:
         self.cfg.scene.terrain, self.cfg.scene.sensors = None, ()
         self.cfg.scene.spec_fn = None
         self.scene = Scene(self.cfg.scene, device="cpu")
-        self.map = add_test_park(self.scene.spec, seed, profile)
+        # 大狗点足比 DigDog 大：桩/胎环按 1.4 缩放；台阶/坡道仍按 profile 的真实高度。
+        self.map = add_test_park(self.scene.spec, seed, profile, robot_scale=1.4)
         self.model = self.scene.compile()
         self.cfg.sim.mujoco.apply(self.model)
         # 把实际求解器参数同步到可导出的 MJCF，而非只修改内存中的模型。
@@ -345,6 +346,12 @@ def play(sim, args):
                     # 数字键也是原生查看器的组可见性快捷键，切赛道后保留地形和机器人可见。
                     viewer.opt.geomgroup[0] = viewer.opt.geomgroup[2] = viewer.opt.geomgroup[4] = True
                     viewer.opt.geomgroup[3] = False
+                elif key in (ord("9"), ord("0")):
+                    commands[:] = 0.
+                    sim.reset("stones" if key == ord("9") else "tires")
+                    paused = False
+                    viewer.opt.geomgroup[0] = viewer.opt.geomgroup[2] = viewer.opt.geomgroup[4] = True
+                    viewer.opt.geomgroup[3] = False
                 elif key == ord("K"):
                     paused = not paused
             commands[:] = keyboard.command() if not paused else 0.
@@ -355,8 +362,9 @@ def play(sim, args):
             viewer.set_texts((mujoco.mjtFontScale.mjFONTSCALE_100, mujoco.mjtGridPos.mjGRID_TOPLEFT,
                              f"{sim.robot_id.upper()} {sim.checkpoint['step']} | {sim.lane['name']} | CPU native\n"
                              "Hold Arrows: vx/vy | Q/E: yaw | Release: stop\nSpace stop  R reset\n"
-                             "1 Flat  2 Stairs4  3 Stairs8  4 Stairs12\n"
-                             "5 Ramp  6 Rubble  7 Mixed  8 Slalom\nK pause  Esc exit\n"
+                             "1 Flat  2 Stairs4  3 Stairs6  4 Stairs8\n"
+                             "5 Stairs10  6 Stairs12  7 Stairs16  8 Ramp\n"
+                             "9 Stones  0 Tires\nK pause  Esc exit\n"
                              f"cmd {commands.round(2)} | vx {row['vx']:.2f} | tilt {row['tilt_degrees']:.1f}\n"
                              f"support {row['wheel_contacts']} | nonwheel {row['nonwheel_force']:.1f}N"
                              + (" | PAUSED" if paused else ""), ""))
@@ -371,7 +379,7 @@ def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_b
     p.add_argument("--checkpoint", type=Path)
     p.add_argument("--profile", choices=PROFILES, default="standard")
     p.add_argument("--lane", choices=LANES, default="stairs8")
-    p.add_argument("--lanes", nargs="+", choices=LANES, default=list(LANES[:-1]))
+    p.add_argument("--lanes", nargs="+", choices=LANES, default=list(LANES))
     p.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
     p.add_argument("--seconds", type=float, default=45.)
     p.add_argument("--speed", type=float, default=.3)

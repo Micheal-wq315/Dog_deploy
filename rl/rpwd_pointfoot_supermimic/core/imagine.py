@@ -52,8 +52,8 @@ def discounted_objective(rewards, continuation, terminal_value, gamma=.99):
 def make_imagined_step(model, actor, constants, weights, env_action_order,
                        dt=.02, noise=True, field=None):
   """Pure single-step graph, shared by eager and compiled execution."""
-  def step(state, previous, history, pose, scan, command, context, bias):
-    action = actor(history)
+  def step(state, previous, history, pose, scan, command, context, bias, kind=None):
+    action = actor(history, scan=scan) if getattr(actor, 'scan_dim', 0) else actor(history)
     model_context = context if field is None else torch.cat((context, scan), -1)
     collision_prob = None
     contacts = None
@@ -71,7 +71,7 @@ def make_imagined_step(model, actor, constants, weights, env_action_order,
     if collision_prob is not None:
       cont = cont * (1. - collision_prob)
     terms = reward_terms(nxt, action, previous, command, constants, cont,
-                         scan=next_scan, pose=pose, field=field, contacts=contacts)
+                         scan=next_scan, pose=pose, field=field, contacts=contacts, kind=kind)
     reward = dt * sum(weights[name] * value for name, value in terms.items())
     latest = frame(nxt, action, command, bias, noise=noise)
     history = push_history(history, latest, actor.history)
@@ -89,7 +89,7 @@ def rollout(model, actor, target_critic, seed, constants, weights, env_action_or
   """
   state, previous, history = seed["state"], seed["previous"], seed["history"]
   command, context, bias = seed["command"], seed["context"], seed["bias"]
-  pose = seed.get("world_pose")
+  pose, kind = seed.get("world_pose"), seed.get("kind")
   def value_input(s, prev, scan):
     base = critic_input(s, command, context, prev)
     return base if field is None else torch.cat((base, scan), -1)
@@ -101,7 +101,7 @@ def rollout(model, actor, target_critic, seed, constants, weights, env_action_or
   for _ in range(horizon):
     inputs.append(value_input(state, previous, scan).detach())
     state, previous, history, pose, scan, reward, cont = step_fn(
-      state, previous, history, pose, scan, command, context, bias)
+      state, previous, history, pose, scan, command, context, bias, kind)
     rewards.append(reward)
     continuations.append(cont)
     next_inputs.append(value_input(state, previous, scan).detach())

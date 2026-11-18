@@ -7,20 +7,32 @@ from .kinematics import foot_state
 WEIGHTS=dict(track_linear_velocity=2.5,track_angular_velocity=1.,upright=.3,
  standstill=-1.,action_rate_l2=-.025,dof_pos_limits=-1.,terminated=-20.,
  base_height=-.3,foot_xy=-.12,swing_clearance=-.5,contact_phase=-.15,
- foot_slip=-.1,landing_velocity=-.05,body_motion=-.02,obstacle_progress=.5)
+ foot_slip=-.1,landing_velocity=-.05,body_motion=-.02,obstacle_progress=.5,
+ foothold=.5,gap=-.5)
 
 def constants(bridge,reference=None):
  from .policy import Actor
  g=bridge.geometry
  return dict(nonwheel_collision=True,geometry=g,default_q=g['default_q'],limits=g['limits'],reference=reference or Actor().reference.to(bridge.env.device))
 
-def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=None,field=None,contacts=None):
+def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=None,field=None,contacts=None,kind=None):
  body,feet,velocity=foot_state(state,pose,field,c['geometry'])
  ground=field.sample(feet[:,:,:2]);clearance=feet[:,:,2]-ground-.022
  phase=safe_atan2(state[:,34],state[:,35])/(2*math.pi)
  target,stance,lift,activation=c['reference'].trajectory(phase,command)
  moving=activation[:,None];stance=torch.where(moving>.01,stance,torch.ones_like(stance))
  support=contacts[:,:4] if contacts is not None else torch.sigmoid((.015-clearance)/.008)
+ # 只在梅花桩(6)/轮胎(7)启用落脚项，避免平地、台阶上出现常驻 gap 惩罚。
+ active=torch.zeros_like(ground[:,0]) if kind is None else ((kind.reshape(-1)==6)|(kind.reshape(-1)==7)).float()
+ # 桩顶/胎面算高地面(.12m以上)；再用窄支撑判定排除 1.4m 起点平台：
+ # 脚周围 8 个方向 0.14m 内存在 >5cm 落差才算“踩在桩顶/胎面上”。
+ on_top=(ground>.12).float()
+ offsets=ground.new_tensor((( .14,0.),(-.14,0.),(0.,.14),(0.,-.14),
+                            (.10,.10),(-.10,.10),(.10,-.10),(-.10,-.10)))
+ ring=field.sample(feet[:,:,:2].unsqueeze(2)+offsets)
+ narrow=((ground[:,:,None]-ring).amax(-1)>.05).float()
+ foothold=((on_top*narrow*support).sum(-1)/support.sum(-1).clamp_min(1))*active
+ gap=((1-on_top)*support).mean(-1)*active
  # 前方多点查障碍，只用于训练奖励；Actor不读取地形。
  speed=(command[:,:2].square().sum(-1)+1e-8).sqrt().clamp_min(.05)
  direction=command[:,:2]/speed[:,None]
@@ -54,7 +66,8 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
   foot_slip=(support*velocity[:,:,:2].square().sum(-1)).mean(-1),
   landing_velocity=(near*velocity[:,:,2].square()).mean(-1),
   body_motion=state[:,6].square()+.2*state[:,7:9].square().sum(-1),
-  obstacle_progress=forward.clamp(-.6,.6)*(speed>.1).float()*rough)
+  obstacle_progress=forward.clamp(-.6,.6)*(speed>.1).float()*rough,
+  foothold=foothold,gap=gap)
 
 def env_reward(env,term):
  if getattr(env,"_foot_reward_counter",-1)==env.common_step_counter:return env._foot_reward_cache[term].clone()
@@ -66,7 +79,9 @@ def env_reward(env,term):
  action=bridge.canonical_action(env.action_manager.action)
  previous=bridge.canonical_action(env.action_manager.prev_action)
  state=bridge.state();pose=bridge.pose();command=env.command_manager.get_command('twist')
+ terrain=getattr(env.scene,'terrain',None)
+ kind=None if terrain is None or not hasattr(terrain,'terrain_types') else terrain.terrain_types.float()
  env._foot_reward_cache=reward_terms(state,action,previous,command,env._pointfoot_reward_constants,
-  (~env.termination_manager.terminated).float(),bridge.field.scan(state,pose),pose,bridge.field,bridge.contacts())
+  (~env.termination_manager.terminated).float(),bridge.field.scan(state,pose),pose,bridge.field,bridge.contacts(),kind)
  env._foot_reward_counter=env.common_step_counter
  return env._foot_reward_cache[term].clone()

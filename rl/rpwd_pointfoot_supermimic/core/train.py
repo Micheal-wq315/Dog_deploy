@@ -14,7 +14,8 @@ import torch
 from .bridge import Go2WBridge, pose_delta
 from ..robot.config import robot_signature
 from .world_model import Go2WWorldModel
-from .policy import Actor, Network, FRAME_DIM, CRITIC_DIM, POLICY_FORMAT, critic_input, checkpoint_wheel_vel
+from .policy import Actor, ScanActor, Network, FRAME_DIM, CRITIC_DIM, POLICY_FORMAT, critic_input, checkpoint_wheel_vel
+from .terrain import SCAN_DIM
 from .replay import Replay
 from .imagine import frozen, rollout, make_imagined_step
 from .recovery import recover_invalid_envs
@@ -64,7 +65,10 @@ class Learner:
       self.model_class, self.format, extra = TerrainWorldModel, TERRAIN_FORMAT, SCAN_DIM
     self.model = self.model_class(tuple(args.wm_hidden), **(
       {"contacts":args.terrain_revision >= 4, "collisions":args.terrain_revision >= 7} if field is not None else {})).to(args.device)
-    self.actor = Actor(args.history, tuple(args.actor_hidden)).to(args.device)
+    self.scan_enabled = getattr(args, 'scan', 'none') != 'none'
+    self.actor = (ScanActor(args.history, tuple(args.actor_hidden), scan_dim=SCAN_DIM,
+                            scan_hidden=tuple(getattr(args, 'scan_hidden', (256, 128, 64))))
+                  if self.scan_enabled else Actor(args.history, tuple(args.actor_hidden))).to(args.device)
     self.critic = Network(CRITIC_DIM + extra, 1, tuple(args.critic_hidden)).to(args.device)
     self.target = copy.deepcopy(self.critic)
     self.optimizers = [torch.optim.Adam(module.parameters(), lr=args.lr)
@@ -99,7 +103,7 @@ class Learner:
 
   def improve(self, seed, constants, weights, env_order, dt):
     args = self.args
-    if args.compile_imagination and self.imagined_step is None:
+    if args.compile_imagination and self.imagined_step is None and not isinstance(self.actor, ScanActor):
       step = make_imagined_step(self.model,self.actor,constants,weights,env_order,
                                 dt=dt,field=self.field)
       self.imagined_step = torch.compile(step, backend="aot_eager", dynamic=False, fullgraph=True)
@@ -154,6 +158,8 @@ class Learner:
       "format": self.format, "step": step, "history": self.actor.history,
       "actor_wheel_vel": False,
       "actor_hidden": self.actor.hidden, "actor": self.actor.state_dict(),
+      "actor_scan_dim": int(getattr(self.actor, 'scan_dim', 0)),
+      "actor_scan_hidden": list(getattr(self.actor, 'scan_hidden', ())),
       "world_model": self.model.checkpoint(), "critic": self.critic.state_dict(),
       "target_critic": self.target.state_dict(), "config": vars(self.args),
       "optimizers": [o.state_dict() for o in self.optimizers],
@@ -209,6 +215,45 @@ class Learner:
     self.env_steps = ckpt.get("env_steps", ckpt["step"] * ckpt["config"].get("num_steps_per_env", 1))
     return ckpt["step"]
 
+  def warm_start(self, path, env_order, dt):
+    """从旧 235 盲策略/教师热启动；不恢复旧优化器与课程统计。"""
+    ckpt = torch.load(path, map_location=self.args.device, weights_only=True)
+    if ckpt.get("robot_id") != self.args.robot:
+      raise ValueError("warm-start 机器人类型不匹配")
+    if ckpt.get("robot_signature") != robot_signature(self.args.robot):
+      raise ValueError("warm-start 机器人资产/步态契约变化")
+    if ckpt.get("format") not in (POLICY_FORMAT, self.format, 'rpwd-pointfoot-terrain-v1'):
+      raise ValueError("warm-start 只接受点足策略 checkpoint")
+    if ckpt.get("history") != self.args.history:
+      raise ValueError("warm-start 观测历史长度不一致")
+    if ckpt.get("env_action_order") != list(env_order) or abs(ckpt.get("dt", 0.) - dt) > 1e-8:
+      raise ValueError("warm-start 动作顺序/控制周期不一致")
+    if checkpoint_wheel_vel(ckpt):
+      raise ValueError("warm-start 不接受轮速旧策略")
+    scan_dim = int(ckpt.get("actor_scan_dim") or 0)
+    if scan_dim:
+      if not isinstance(self.actor, ScanActor) or scan_dim != self.actor.scan_dim:
+        raise ValueError("warm-start 教师策略需要相同的 --scan 和高度图维度")
+      self.actor.load_state_dict(ckpt["actor"])
+    else:
+      if not isinstance(self.actor, ScanActor):
+        raise ValueError("warm-start 盲策略需要 --scan true 来创建高度图分支")
+      self.actor.load_state_dict(ckpt["actor"], strict=False)
+      self.actor._init_scan_head()
+    self.model.load_state_dict(self.model_class.from_checkpoint(ckpt["world_model"]).state_dict())
+    self.critic.load_state_dict(ckpt["critic"])
+    self.target.load_state_dict(ckpt["target_critic"])
+    # 地形种类/课程已变化时不搬旧统计；只搬权重。
+    self.terrain_state = None
+    self.curriculum_state = None
+    self.policy_updates = 0
+    self.skipped_updates = 0
+    self.compiler_fallbacks = 0
+    self.invalid_env_resets = 0
+    self.env_steps = 0
+    self.imagined_step = None
+    return int(ckpt.get("step", 0))
+
 
 def parser():
   p = argparse.ArgumentParser(description=__doc__)
@@ -243,6 +288,9 @@ def parser():
   p.add_argument("--probe-fraction", type=float, default=.2)
   p.add_argument("--robot", choices=("rpwd_pointfoot",), default="rpwd_pointfoot")
   p.add_argument("--resume", default="")
+  p.add_argument("--warm-start", default="")
+  p.add_argument("--scan", choices=("none", "true"), default="none")
+  p.add_argument("--scan-hidden", type=int, nargs="+", default=[256, 128, 64])
   p.add_argument("--output", default="")
   return p
 
@@ -252,6 +300,10 @@ def main():
   args = p.parse_args()
   if not args.terrain:p.error("点足新任务必须使用--terrain；正式入口train_pointfoot_mjlab.sh已配置")
   if args.init_actor:p.error("不接受旧flat或轮足Actor，点足版需从零训练或完整恢复对应checkpoint")
+  if args.scan != 'none' and not args.terrain:
+    p.error("--scan true 需要 --terrain 高度场")
+  if args.warm_start and args.resume:
+    p.error("--warm-start 与 --resume 二选一")
   if args.device.startswith("cuda"):torch.set_float32_matmul_precision("high")
   positive = (args.archive_size, args.critic_minibatches, args.lr_decay_iterations, args.num_steps_per_env, args.num_envs, args.iterations, args.buffer_len, args.history, args.wm_window,
               args.wm_batch, args.wm_updates, args.imag_batch, args.horizon, args.critic_epochs,
@@ -327,6 +379,9 @@ def main():
     replay = Replay(args.buffer_len, args.num_envs, args.device, FRAME_DIM * args.history,
                     terrain=args.terrain, contacts=contact_targets, courses=args.terrain_revision >= 5, collisions=args.terrain_revision >= 7)
     start = learner.load(args.resume, bridge.to_env, env.step_dt) if args.resume else 0
+    if args.warm_start:
+      old_step = learner.warm_start(args.warm_start, bridge.to_env, env.step_dt)
+      print(f"Warm start: {args.warm_start} (old step {old_step}); optimizers/replay fresh", flush=True)
     if args.command_curriculum:
       set_command_stage(env.command_manager.get_term("twist").cfg,
                         start - args.command_curriculum_start,
@@ -395,12 +450,17 @@ def main():
             state, pose, context = bridge.state(), bridge.pose(), bridge.context()
             command = env.command_manager.get_command("twist").clone()
             bias = bridge.robot.data.encoder_bias[:, bridge.legs].clone()
+            scan = None
+            if isinstance(learner.actor, ScanActor):
+              scan = field.scan(state, pose)
+              learner.actor.scan_norm.update(scan)
             learner.actor.norm.update(history)
             learner.critic.norm.update(learner.critic_input(state, command, context, previous, pose))
             learner.target.norm.load_state_dict(learner.critic.norm.state_dict())
             ou = 0.95 * ou + (1 - 0.95**2)**0.5 * torch.randn_like(ou)
             noise_scale = args.action_noise * max(.15, 1. - (step+1)/12000.)
-            action = learner.actor(history, noise_scale * ou)
+            action = (learner.actor(history, noise_scale * ou, scan=scan)
+                      if scan is not None else learner.actor(history, noise_scale * ou))
             if args.terrain_revision >= 5:
               course_types = env.scene.terrain.terrain_types.clone()
               course_levels = env.scene.terrain.terrain_levels.clone()
@@ -443,6 +503,7 @@ def main():
             replay.add(state=state, action=action, previous=previous, context=context,
                        next=nxt, pose=delta, valid=valid[:, None], history=history,
                        command=command, bias=bias, **({"world_pose": pose} if args.terrain else {}),
+                       **({"kind": env.scene.terrain.terrain_types.float()[:, None]} if args.terrain else {}),
                        **({"next_contacts":bridge.contacts()} if contact_targets else {}), **course_data)
             if valid.any():
               model_context = context if field is None else torch.cat((context, field.scan(state, pose)), -1)

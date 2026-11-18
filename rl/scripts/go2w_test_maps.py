@@ -9,11 +9,11 @@ LANES = ("flat", "stairs4", "stairs6", "stairs8", "stairs10", "stairs12", "stair
 PROFILES = {"easy": .75, "standard": 1., "hard": 4 / 3}
 
 
-def add_test_park(spec, seed=0, profile="standard"):
+def add_test_park(spec, seed=0, profile="standard", robot_scale=1.0):
     rng = np.random.default_rng(seed)
     scale = PROFILES[profile]
     manifest = {"generator": "go2w-native-park-v1", "seed": seed, "profile": profile,
-                "height_scale": scale, "lanes": [], "geometry": []}
+                "height_scale": scale, "robot_scale": robot_scale, "lanes": [], "geometry": []}
     colors = ((.33, .65, .72), (.35, .67, .43), (.72, .55, .35), (.83, .64, .26),
               (.45, .62, .68), (.78, .37, .31), (.58, .48, .72), (.40, .55, .79),
               (.62, .52, .42), (.62, .42, .73), (.68, .58, .33), (.55, .70, .48),
@@ -107,34 +107,40 @@ def add_test_park(spec, seed=0, profile="standard"):
                     .35, .50, 1.05, color)
             lane.update(description="遥控绕障；需要操作者选择路线，盲策略没有自主避障输入")
         elif name == "stones":
-            for ix, x in enumerate(np.arange(2.2, 6.8, .46)):
-                for iy, yy in enumerate((-.82, -.30, .30, .82)):
+            # 梅花桩：细高桩，桩顶小、桩间深空隙；机器人必须踩桩顶。
+            # robot_scale 让大狗点足与 DigDog 共用同一套测试场。
+            step = .42 * robot_scale
+            for ix, x in enumerate(np.arange(2.3, 6.7, step)):
+                for iy, yy in enumerate(np.array((-.86, -.43, 0., .43, .86)) * robot_scale):
                     if (ix + iy) % 2:
                         continue
-                    h = (.02 + .02 * (ix % 6)) * scale
+                    side = (.10 + .015 * (ix % 3)) * robot_scale
+                    height = (.24 + .025 * ((2 * ix + iy) % 8)) * robot_scale
                     box(f"stones_{ix}_{iy}", x + rng.uniform(-.02, .02),
-                        y + yy + rng.uniform(-.02, .02), h, .30, .30, color,
-                        yaw=rng.uniform(-.15, .15))
-            lane.update(max_obstacle_height=.12 * scale,
-                        description="梅花桩：交错箱体岛，桩间留跨步间隙")
+                        y + yy + rng.uniform(-.02, .02), height, side, side, color,
+                        yaw=rng.uniform(-.10, .10))
+            lane.update(max_obstacle_height=.43 * robot_scale,
+                        description="梅花桩：细高桩顶、桩间深空隙，需踩桩顶")
         elif name == "tires":
-            for ix, x in enumerate(np.arange(2.2, 6.8, .62)):
-                for iy, yy in enumerate((-.85, -.30, .30, .85)):
+            # 轮胎：平躺圆环胎（外径 D、胎孔 d、胎宽 w），多个紧挨成簇；踩胎面，胎孔可踩空。
+            D = .40 * robot_scale
+            hole = .20 * robot_scale
+            w = .12 * robot_scale
+            rmid = (D + hole) / 4
+            seg = (D - hole) / 2
+            tang = 2 * math.pi * rmid / 12
+            for ix, x in enumerate(np.arange(2.3, 6.8, D * .95)):
+                for iy, yy in enumerate(np.array((-.9, -.45, 0., .45, .9)) * robot_scale):
                     if (ix + iy) % 2:
                         continue
-                    radius = (.06 + .012 * (ix % 5)) * scale
-                    half = .10
-                    world.add_geom(name=f"test_tires_{ix}_{iy}",
-                                   type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-                                   pos=(x, y + yy, radius), size=(radius, half, 0.),
-                                   quat=(math.sqrt(.5), -math.sqrt(.5), 0., 0.),
-                                   rgba=(*color, 1), group=0, contype=1, conaffinity=1,
-                                   condim=3, friction=(.8, .02, .001))
-                    manifest["geometry"].append(dict(name=f"tires_{ix}_{iy}",
-                                                     pos=[x, y + yy, radius],
-                                                     size=[radius, half]))
-            lane.update(max_obstacle_height=.17 * scale,
-                        description="横放轮胎：圆柱轴沿车道横向")
+                    cx, cy = x + rng.uniform(-.02, .02), y + yy + rng.uniform(-.02, .02)
+                    for k in range(12):
+                        ang = 2 * math.pi * k / 12
+                        box(f"tires_{ix}_{iy}_{k}", cx + rmid * math.cos(ang),
+                            cy + rmid * math.sin(ang), w, seg, tang, color,
+                            yaw=ang)
+            lane.update(max_obstacle_height=w,
+                        description="平躺轮胎：圆环胎紧密排列，胎面孔隙需落脚")
         else:
             lane.update(description="平地速度、横移与转向基线")
         manifest["lanes"].append(lane)

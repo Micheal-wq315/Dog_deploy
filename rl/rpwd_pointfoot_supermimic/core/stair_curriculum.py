@@ -3,30 +3,37 @@
 All buffers are training-only metadata, never actor observations.
 """
 import torch
+from ..robot.config import STAND_HEIGHT
 
-KINDS = ('flat', 'up', 'down', 'platform', 'slope', 'rubble')
-MIN_ITERATIONS = (0, 3000, 8000, 15000, 22000)
+KINDS = ('flat', 'up', 'down', 'platform', 'slope', 'rubble', 'stones', 'tires')
+HEIGHTS = (.02, .04, .06, .08, .10, .12, .14, .16)
+# 20000 轮教师必须覆盖到 16cm：第 6 段（14cm 考核）在 15000 轮解锁，留 5000 轮
+# 在无探针固定的最高档继续训练。若沿用 34000 轮的旧表，20k 只会走到 10cm。
+MIN_ITERATIONS = (0, 2000, 5000, 8000, 11000, 13000, 15000)
 
 
 def buffers(env):
   if not hasattr(env, '_stair_stats'):
-    env._stair_stats = torch.zeros(6, 6, 4, device=env.device)  # trials, pass, fall, stuck
+    env._stair_stats = torch.zeros(len(KINDS), len(HEIGHTS), 4, device=env.device)  # trials, pass, fall, stuck
     env._stair_stall_time = torch.zeros(env.num_envs, device=env.device)
     env._stair_stuck = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
   if not hasattr(env, '_stair_recent'):
     window = getattr(env.cfg, 'promotion_window', 256)
-    env._stair_recent = torch.zeros(4, window, dtype=torch.uint8, device=env.device)
-    env._stair_recent_count = torch.zeros(4, dtype=torch.long, device=env.device)
+    env._stair_recent = torch.zeros(len(HEIGHTS) - 2, window, dtype=torch.uint8, device=env.device)
+    env._stair_recent_count = torch.zeros(len(HEIGHTS) - 2, dtype=torch.long, device=env.device)
     env._stair_episode_stage = torch.full((env.num_envs,), getattr(env, '_stair_stage', 0), dtype=torch.long, device=env.device)
   return env._stair_stats
 
 
 def stair_pass(offset, gravity, level, up):
   """Require body/rear clearance of the last riser, correct landing height and stability."""
-  heights = offset.new_tensor([.02, .04, .06, .08, .10, .12])[level]
+  heights = offset.new_tensor(HEIGHTS)[level]
   expected = torch.where(up, 5 * heights, -5 * heights)
+  # 机身高度窗口必须按本机器人0.16m站高，而不是点足0.34m的固定 .23/.46。
+  lo = expected + STAND_HEIGHT - .10
+  hi = expected + STAND_HEIGHT + .12
   return ((offset[:, 0].abs() > 2.8) & (offset[:, 1].abs() < 2.5)
-          & (offset[:, 2] > expected + .23) & (offset[:, 2] < expected + .46)
+          & (offset[:, 2] > lo) & (offset[:, 2] < hi)
           & (gravity[:, :2].norm(dim=-1) < .4))
 
 
@@ -37,7 +44,7 @@ def curriculum(env, env_ids):
   offset = d.root_link_pos_w[env_ids] - env.scene.env_origins[env_ids]
   levels = terrain.terrain_levels[env_ids].clone()
   types = terrain.terrain_types[env_ids]
-  # Six fixed columns, generated in KINDS order.
+  # Eight fixed columns, generated in KINDS order.
   stairs = (types == 1) | (types == 2)
   active = env.episode_length_buf[env_ids] > 0
   fallen = env.termination_manager.terminated[env_ids]
@@ -45,6 +52,13 @@ def curriculum(env, env_ids):
   top = stair_pass(offset, d.projected_gravity_b[env_ids], levels, types == 1)
   foot_ids,_=env.scene['robot'].find_bodies(tuple(f'{x}_foot_link' for x in ('FL','FR','RL','RR')),preserve_order=True)
   feet=d.body_link_pos_w[env_ids][:,foot_ids]-env.scene.env_origins[env_ids,None,:]
+  # stones/tires 不允许在平地上绕过：至少一半支撑脚要落在桩顶/胎面(高地面)。
+  bridge = getattr(env, '_go2w_posture_bridge', None)
+  if bridge is not None:
+    world_feet = feet + env.scene.env_origins[env_ids, None, :]
+    on_top = (bridge.field.sample(world_feet[:, :, :2]) > .12).float().mean(-1) > .5
+    surface = (types == 6) | (types == 7)
+    success = torch.where(surface, success & on_top, success)
   direction=offset[:,0].sign()
   rear_clear=(feet[:,:,0]*direction[:,None]).amin(-1)>2.65
   top=top & rear_clear
@@ -56,10 +70,10 @@ def curriculum(env, env_ids):
   trials = (~stairs | traversal) & active & ((env.episode_length_buf[env_ids] * env.step_dt >= 5.) | fallen)
   values = torch.stack((trials, success & trials, fallen & trials,
                         env._stair_stuck[env_ids] & trials), -1).float()
-  stats.view(-1, 4).index_add_(0, types * 6 + levels, values)
+  stats.view(-1, 4).index_add_(0, types * len(HEIGHTS) + levels, values)
   record_recent(env, levels, types, trials, values[:, 1], env._stair_episode_stage[env_ids])
-  terrain.terrain_levels[env_ids] = (levels + success.long() - (active & fallen).long()).clamp(0, 5)
-  if hasattr(env, '_stair_probe_mask') and env._stair_stage < 4:
+  terrain.terrain_levels[env_ids] = (levels + success.long() - (active & fallen).long()).clamp(0, len(HEIGHTS) - 1)
+  if hasattr(env, '_stair_probe_mask') and env._stair_stage < len(HEIGHTS) - 2:
     pinned = env._stair_probe_mask[env_ids]
     terrain.terrain_levels[env_ids[pinned]] = env._stair_stage + 1
   terrain.env_origins[env_ids] = terrain.terrain_origins[terrain.terrain_levels[env_ids], types]
@@ -82,7 +96,7 @@ def append_recent(history, counts, index, outcomes):
 def record_recent(env, levels, types, trials, passed, episode_stages):
   # 扩速前开始的旧回合不能作为新命令阶段的考核成绩。
   current = episode_stages == getattr(env, '_stair_stage', 0)
-  for index in range(4):
+  for index in range(len(HEIGHTS) - 2):
     eligible = (types == 1) & (levels == index + 1) & trials & current
     append_recent(env._stair_recent, env._stair_recent_count, index, passed[eligible])
 
@@ -94,7 +108,7 @@ def recent_counts(env):
 
 
 def next_stage(stage, iteration, recent, velocity_mae, min_trials=128, pass_rate=.60):
-  if stage >= 4 or iteration < MIN_ITERATIONS[stage + 1]:
+  if stage >= len(HEIGHTS) - 2 or iteration < MIN_ITERATIONS[stage + 1]:
     return stage
   trials, passed = recent[stage]
   accurate = max(velocity_mae[:2]) < .18 and velocity_mae[2] < .30
@@ -106,7 +120,7 @@ def set_probe_stage(env, stage, fraction=.2):
   env._stair_stage = stage
   ids = torch.where(env.scene.terrain.terrain_types == 1)[0]
   env._stair_probe_mask = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
-  if stage < 4 and len(ids):
+  if stage < len(HEIGHTS) - 2 and len(ids):
     count = max(1, round(len(ids) * fraction))
     # 沿环境序号均匀抽取，避免只覆盖某一连续区域的随机参数。
     positions = torch.linspace(0, len(ids) - 1, count, device=env.device).long()
@@ -135,10 +149,10 @@ def restore_recent(env, saved):
 
 
 def promotion_report(env, stage):
-  if stage >= 4:
+  if stage >= len(HEIGHTS) - 2:
     return dict(stage=stage, complete=True)
   trials, passed = recent_counts(env)[stage].cpu().tolist()
-  return dict(stage=stage, target_height_cm=(4, 6, 8, 10)[stage], trials=trials,
+  return dict(stage=stage, target_height_cm=(4, 6, 8, 10, 12, 14)[stage], trials=trials,
               passed=passed, pass_rate=passed / max(trials, 1),
               required_trials=getattr(env.cfg, 'promotion_min_trials', 128),
               required_pass_rate=getattr(env.cfg, 'promotion_pass_rate', .6),
@@ -151,6 +165,6 @@ def summary(env):
   result = {}
   for i, name in enumerate(KINDS):
     selected = levels[types == i]
-    result[name] = dict(level_counts=torch.bincount(selected, minlength=6).cpu().tolist(),
+    result[name] = dict(level_counts=torch.bincount(selected, minlength=len(HEIGHTS)).cpu().tolist(),
                        episodes_by_level=stats[i])
   return result
