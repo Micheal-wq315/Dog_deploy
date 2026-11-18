@@ -100,13 +100,14 @@ class CourseCfg(SubTerrainCfg):
                 yaw=yaw+.6,pitch=pitch,shade=.55)
     elif self.kind == "stones":
       # 参考 extreme-parkour 的 stepping stones：桩间挖 1m 深坑，桩柱从坑底
-      # 升到统一桩顶面；起点与四周保留平地，机器人从平地直接上桩。低难度
-      # 大桩面/小间隙，高难度小桩面/大间隙；桩顶高度仍取档位 h（2–16cm）。
-      # 只靠平地托底时桩间没有落差，机器人会直接走平地绕过，学不到落脚。
+      # 升到统一桩顶面；中央起点小岛 1.2m（原 1.8m，减少原地停留空间），
+      # 四周保留平地。低难度大桩面/小间隙，高难度小桩面/大间隙；桩顶高度
+      # 仍取档位 h（2–16cm）。只靠平地托底时桩间没有落差，机器人会直接走
+      # 平地绕过，学不到落脚。
       pit_depth = 1.0
-      pit_x0, pit_x1 = 1.9, 7.1
+      pit_x0, pit_x1 = 1.6, 7.4
       pit_y0, pit_y1 = sy/2-1.9, sy/2+1.9
-      # 坑底：box() 的双向镜像会自动生成左右两个坑。
+      # 坑底：box() 的双向镜像会自动生成左右两个坑；两坑之间就是 1.2m 小岛。
       box((pit_x0+pit_x1)/2, sy/2, -pit_depth-.1,
           pit_x1-pit_x0, pit_y1-pit_y0, .2, shade=.25)
       # 平地框：先铺满 16m 见方，再空出两个坑。这里用 direct_box 直接写
@@ -120,7 +121,9 @@ class CourseCfg(SubTerrainCfg):
       side = .40 - (.40 - .14) * level / span
       gap = .04 + .12 * level / span
       step = side + gap
-      for ix, x in enumerate(np.arange(2.0, 7.1, step)):
+      # 从 1.8 起步让第一排桩正好贴住 1.2m 小岛边缘（镜像后 7.2m/8.8m），
+      # 机器人从岛上直接上桩，不需要跨 0.2m 的坑。
+      for ix, x in enumerate(np.arange(1.8, 7.1, step)):
         for iy, y in enumerate(np.arange(sy/2-1.7, sy/2+1.7, step)):
           if (ix + iy) % 2:
             continue

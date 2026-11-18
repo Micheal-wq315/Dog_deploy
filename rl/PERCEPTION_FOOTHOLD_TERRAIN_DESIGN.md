@@ -205,3 +205,12 @@
 - 测试场：`add_test_park` 的 plane 改为带孔 box 地板（plane 无法开孔），stones lane 桩柱从 -1m 升到 .10m，坑深 1m；`pointfoot_mujoco` 高度场 bounds 改为 (-18,-30)..(18,30)。
 - 验证：8 环境 CPU 检查 stones 桩间 -1.0m、桩顶 .02m、起点/四周平地 0m，scan 最大 1.37m（能看到坑）；原生测试场桩间 -1.0m、桩顶 .10m；`mark_surface_reached` step 事件正常创建 latch；py_compile 通过。
 - 训练：从 `model_18500` 热启动、3072 环境、40000 轮。
+
+### 10.4 小岛 1.2m 与落脚奖励加强（2026-11-19）
+
+- 13.6k 时 stones 仍 0 pass：232 次尝试/74 次掉落，约 158 次不掉但不过，foothold 0.0032 进入平台期；判断为停在 1.8m 中央小岛或两侧平地绕行，而不是踩桩前进。
+- 小岛 1.8m → 1.2m：坑改为 [1.6,7.4] 与 [8.6,14.4]；stone 源起点 1.8，第一排桩镜像到 7.2m/8.8m，正好贴住小岛边缘，不需要跨 0.2m 的坑。
+- 奖励：`foothold .5→1.5`、`gap -.5→-1.0`；新增 `surface_progress=1.5`（脚在桩顶/胎面时前进才加分）和 `surface_bypass=-1.0`（在中央小岛/平地前进扣分），避免靠拖时间/绕行拿速度跟踪奖励。
+- 诊断：`stair_curriculum` 增加 stones/tires 的终点 x、on_top 比例、掉落/出口/超时分类，写入 metrics 的 `terrain_details.surface_diag`。
+- 验证：8 环境小岛中心 0m、第一排桩 .02m、坑底在 scan 中可见（最大 1.375m）、step 事件 latch 正常、py_compile 通过。
+- 训练：从 `model_13500` 热启动、3072 环境、40000 轮。

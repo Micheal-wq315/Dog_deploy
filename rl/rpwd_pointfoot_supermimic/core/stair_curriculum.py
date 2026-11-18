@@ -81,16 +81,34 @@ def curriculum(env, env_ids):
   # 出口在桩/胎区边缘，reset 瞬间前脚可能已落到平地；用 step 事件锁存的
   # “踩在桩顶/胎面越过终点线”补充判定，避免真正通过的回合被判 0 pass。
   surface = (types == 6) | (types == 7)
+  on_top_frac = torch.zeros_like(offset[:, 0])
   bridge = getattr(env, '_go2w_posture_bridge', None)
   if bridge is not None:
     world_feet = feet + env.scene.env_origins[env_ids, None, :]
-    on_top = (bridge.field.sample(world_feet[:, :, :2]) > .01).float().mean(-1) > .5
+    on_top_frac = (bridge.field.sample(world_feet[:, :, :2]) > .01).float().mean(-1)
+    on_top = on_top_frac > .5
     reached = getattr(env, '_surface_reached', None)
     if reached is not None:
       success = torch.where(surface, (success & on_top) | reached[env_ids], success)
       reached[env_ids] = False
     else:
       success = torch.where(surface, success & on_top, success)
+  # stones/tires 回合诊断：终点 x、on_top 比例、掉落/出口/超时分类。累计值
+  # 只用于日志，不进入观测；train.py 的 terrain_details 会把它写进 metrics。
+  if not hasattr(env, '_surface_diag'):
+    env._surface_diag = torch.zeros(2, 6, device=env.device)
+  exited = (offset[:, 0].abs() > 6.5) | (offset[:, 1].abs() > 6.5)
+  for index, kind in enumerate((6, 7)):
+    selected = (types == kind) & active
+    if not selected.any():
+      continue
+    diag = env._surface_diag[index]
+    diag[0] += selected.sum()
+    diag[1] += offset[selected, 0].sum()
+    diag[2] += on_top_frac[selected].sum()
+    diag[3] += fallen[selected].sum()
+    diag[4] += exited[selected].sum()
+    diag[5] += (~fallen[selected] & ~exited[selected]).sum()
   direction=offset[:,0].sign()
   rear_clear=(feet[:,:,0]*direction[:,None]).amin(-1)>2.65
   top=top & rear_clear
@@ -199,4 +217,10 @@ def summary(env):
     selected = levels[types == i]
     result[name] = dict(level_counts=torch.bincount(selected, minlength=len(HEIGHTS)).cpu().tolist(),
                        episodes_by_level=stats[i])
+  diag = env._surface_diag.detach().cpu().tolist() if hasattr(env, '_surface_diag') else [[0.] * 6] * 2
+  result['surface_diag'] = {
+      name: dict(trials=diag[i][0], end_x_mean=diag[i][1] / max(diag[i][0], 1.),
+                 on_top_mean=diag[i][2] / max(diag[i][0], 1.),
+                 fall=diag[i][3], exit=diag[i][4], timeout=diag[i][5])
+      for i, name in enumerate(('stones', 'tires'))}
   return result

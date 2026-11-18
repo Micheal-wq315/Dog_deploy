@@ -8,7 +8,7 @@ WEIGHTS=dict(track_linear_velocity=2.5,track_angular_velocity=1.,upright=.3,
  standstill=-1.,action_rate_l2=-.025,dof_pos_limits=-1.,terminated=-20.,
  base_height=-.3,foot_xy=-.12,swing_clearance=-.5,contact_phase=-.15,
  foot_slip=-.1,landing_velocity=-.05,body_motion=-.02,obstacle_progress=.5,
- foothold=.5,gap=-.5)
+ foothold=1.5,gap=-1.,surface_progress=1.5,surface_bypass=-1.)
 
 def constants(bridge,reference=None):
  from .policy import Actor
@@ -35,6 +35,9 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
  high_near=(ring>.01).any(-1).float()
  foothold=((on_top*support).sum(-1)/support.sum(-1).clamp_min(1))*active
  gap=((1-on_top)*support*high_near).mean(-1)*active
+ # 过桩进度/绕行惩罚：只有脚真正落在桩顶/胎面时前进才加分；在中央小岛或
+ # 两侧平地上前进会被扣分，避免策略靠拖时间/绕行拿速度跟踪奖励。
+ on_top_frac=on_top.mean(-1)
  # 前方多点查障碍，只用于训练奖励；Actor不读取地形。
  speed=(command[:,:2].square().sum(-1)+1e-8).sqrt().clamp_min(.05)
  direction=command[:,:2]/speed[:,None]
@@ -56,6 +59,8 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
  violation=((limits[:,0]-q).clamp_min(0)+(q-limits[:,1]).clamp_min(0)).sum(-1)
  near=(clearance<.04).float()
  forward=(state[:,4:6]*command[:,:2]).sum(-1)/speed
+ surface_progress=forward.clamp(0,.6)*active*on_top_frac
+ surface_bypass=forward.clamp(0,.6)*active*(1-on_top_frac)
  return dict(
   track_linear_velocity=torch.exp(-(state[:,4:6]-command[:,:2]).square().sum(-1)/.09),
   track_angular_velocity=torch.exp(-(state[:,9]-command[:,2]).square()/.09),
@@ -69,7 +74,8 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
   landing_velocity=(near*velocity[:,:,2].square()).mean(-1),
   body_motion=state[:,6].square()+.2*state[:,7:9].square().sum(-1),
   obstacle_progress=forward.clamp(-.6,.6)*(speed>.1).float()*rough,
-  foothold=foothold,gap=gap)
+  foothold=foothold,gap=gap,
+  surface_progress=surface_progress,surface_bypass=surface_bypass)
 
 def env_reward(env,term):
  if getattr(env,"_foot_reward_counter",-1)==env.common_step_counter:return env._foot_reward_cache[term].clone()
