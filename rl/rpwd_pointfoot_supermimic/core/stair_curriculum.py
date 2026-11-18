@@ -136,7 +136,7 @@ def curriculum(env, env_ids):
     diag[3] += fallen[selected].sum()
     diag[4] += exited[selected].sum()
     diag[5] += (~fallen[selected] & ~exited[selected]).sum()
-    diag[6] += env._stair_stuck[selected].sum()
+    diag[6] += env._stair_stuck[env_ids][selected].sum()
   direction=offset[:,0].sign()
   rear_clear=(feet[:,:,0]*direction[:,None]).amin(-1)>2.65
   top=top & rear_clear
