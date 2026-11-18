@@ -16,6 +16,7 @@ class Replay:
     if terrain:
       dims["world_pose"] = 3
       dims["kind"] = 1  # 地形类型，用于只在桩阵/胎环上启用落脚奖励
+      dims["origin_z"] = 1  # 地形原点/起点平台高度，用于想象 stone_fall
     if contacts:
       dims["next_contacts"] = 16
     if collisions:

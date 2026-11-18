@@ -31,8 +31,11 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
                             (.10,.10),(-.10,.10),(.10,-.10),(-.10,-.10)))
  ring=field.sample(feet[:,:,:2].unsqueeze(2)+offsets)
  narrow=((ground[:,:,None]-ring).amax(-1)>.05).float()
+ # 只有脚附近确实存在高桩顶/胎面时才把低支撑判为 gap；否则 tires 入口的
+ # 普通地面也会被当成“踩空”，机器人还没走到胎阵就被持续惩罚。
+ high_near=(ring>.12).any(-1).float()
  foothold=((on_top*narrow*support).sum(-1)/support.sum(-1).clamp_min(1))*active
- gap=((1-on_top)*support).mean(-1)*active
+ gap=((1-on_top)*support*high_near).mean(-1)*active
  # 前方多点查障碍，只用于训练奖励；Actor不读取地形。
  speed=(command[:,:2].square().sum(-1)+1e-8).sqrt().clamp_min(.05)
  direction=command[:,:2]/speed[:,None]

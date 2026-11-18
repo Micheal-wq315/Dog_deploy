@@ -178,3 +178,10 @@
 - 首次 3072 环境训练（12552 geom/环境）在 step1150 表现为假训练：reward -5.5M、base_height -275M、velocity_mae 20–28m/s、stones 13705 回合全 fall；确认是 Warp 静态 geom 总缓冲超限导致自由落体，不是算法/奖励调参问题。
 - 修复后 3072 环境训练 step50：reward=0.0634、falls=1、velocity_mae=0.074/0.050/0.116；step200：reward=0.0635、stones 50 次尝试（早期从盲走热启动掉桩属正常）、无自由落体/无 base_height 爆炸。
 - 待办：点足 10/12 台阶与 stones/tires 落脚门禁；DigDog 按同源几何迁移（旧 `model_20000` 热启动，10/12 门禁）；`pointfoot_mujoco` 接 true scan 以加载新 508 维模型。
+
+### 10.1 5000 步续训修复
+
+- 现象：stairs/flat 持续进步（step5000 reward=0.0714、velocity_mae=0.038/0.032/0.063、level_mean=1.0），但 stones/tires 仍 0 pass。
+- 根因：Actor 的想象 rollout 里 `survival` 只看倾角；真实 `stone_fall`（root z 相对起点平台下沉 >10cm）没有进入想象 continuation，Actor 在想象里走下桩/平台不会被惩罚。tires 入口普通地面还被 `gap` 持续扣分。
+- 修复：Replay 增加 `origin_z`；`imagine.py` 按 `root_z - origin_z < .10` 把 stones 的 fall 乘入 `cont`；`task.py` 的 `gap` 增加 `high_near`（脚下 0.14m 内有 >0.12m 高面才计 gap）。
+- 验证：8 环境 CPU 烟测 `gap=0`、actor_loss 有限、0 falls；从 `model_5000.pt` 续训，step5050 reward=0.0688、falls=1、velocity_mae=0.056/0.030/0.079、`gap≈0`；命令课程在 5000 晋级 stage2，统计窗口清零属设计行为。

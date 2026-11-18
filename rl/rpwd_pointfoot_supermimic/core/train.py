@@ -503,7 +503,8 @@ def main():
             replay.add(state=state, action=action, previous=previous, context=context,
                        next=nxt, pose=delta, valid=valid[:, None], history=history,
                        command=command, bias=bias, **({"world_pose": pose} if args.terrain else {}),
-                       **({"kind": env.scene.terrain.terrain_types.float()[:, None]} if args.terrain else {}),
+                       **({"kind": env.scene.terrain.terrain_types.float()[:, None],
+                           "origin_z": env.scene.env_origins[:, 2:3]} if args.terrain else {}),
                        **({"next_contacts":bridge.contacts()} if contact_targets else {}), **course_data)
             if valid.any():
               model_context = context if field is None else torch.cat((context, field.scan(state, pose)), -1)
