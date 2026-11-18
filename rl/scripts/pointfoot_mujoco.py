@@ -359,21 +359,33 @@ def _draw_scan(viewer, sim):
         scn.ngeom += 1
 
 
-def _show_heatmap(sim, enabled):
-    """可选2D高程热力图；方向为机体系 x向右、y向上。"""
+def _show_heatmap(sim, enabled, state):
+    """可选2D高程热力图；方向为机体系 x向右、y向上。
+
+    这个环境的 OpenCV 是 headless 构建（cv2.imshow 不可用），因此用
+    matplotlib TkAgg；只在第一次调用时创建窗口，之后只更新图像。
+    """
     if not enabled or not sim.scan_show or sim.last_scan is None:
         return
-    import cv2
     h = (float(sim.data.qpos[2]) - sim.last_scan).reshape(sim.scan_shape).T
-    image = np.uint8(np.clip(h / .55, 0., 1.) * 255)
-    image = cv2.applyColorMap(cv2.resize(image, (21 * 18, 13 * 18),
-                                         interpolation=cv2.INTER_NEAREST), cv2.COLORMAP_TURBO)
-    cv2.putText(image, f"ground height  min {h.min():.2f}  max {h.max():.2f}  mean {h.mean():.2f}",
-                (8, 22), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(image, "x -> right   y -> up", (8, image.shape[0] - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, .45, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.imshow("height scan (body frame)", image)
-    cv2.waitKey(1)
+    if state["plt"] is None:
+        import matplotlib
+        matplotlib.use("TkAgg")
+        import matplotlib.pyplot as plt
+        plt.ion()
+        state["plt"] = plt
+        state["fig"], state["ax"] = plt.subplots(figsize=(6.4, 4.2))
+        state["im"] = state["ax"].imshow(h, vmin=0., vmax=.55, cmap="turbo", origin="lower")
+        state["ax"].set_xlabel("x [m] (body right)")
+        state["ax"].set_ylabel("y [m] (body up)")
+        state["fig"].colorbar(state["im"], ax=state["ax"], label="ground height [m]")
+        state["fig"].canvas.manager.set_window_title("height scan (body frame)")
+        plt.show(block=False)
+    else:
+        state["im"].set_data(h)
+    state["ax"].set_title(f"ground h  min {h.min():.2f}  max {h.max():.2f}  mean {h.mean():.2f}")
+    state["fig"].canvas.draw_idle()
+    state["fig"].canvas.flush_events()
 
 
 def play(sim, args):
@@ -382,6 +394,7 @@ def play(sim, args):
     events = queue.SimpleQueue()
     keyboard = HeldKeyboard(args.speed, args.lateral_speed, args.turn_speed)
     sim.reset(args.lane)
+    heat = {"plt": None, "fig": None, "ax": None, "im": None}
     with mujoco.viewer.launch_passive(sim.model, sim.data, key_callback=events.put) as viewer:
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         viewer.cam.trackbodyid = sim.base
@@ -439,13 +452,12 @@ def play(sim, args):
                              + scan_text
                              + ("PAUSED" if paused else ""), ""))
             _draw_scan(viewer, sim)
-            _show_heatmap(sim, args.scan_heatmap)
+            _show_heatmap(sim, args.scan_heatmap, heat)
             viewer.sync()
             time.sleep(max(0., sim.dt - (time.monotonic() - began)))
     keyboard.close()
-    if args.scan_heatmap:
-        import cv2
-        cv2.destroyAllWindows()
+    if heat["plt"] is not None:
+        heat["plt"].close("all")
 
 
 def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_backend=None):
