@@ -146,6 +146,14 @@ class NativeGo2W:
         self.last_scan = None
         self.scan_world = None
         self.scan_show = True
+        # 启动时把测试场静态几何栅格化成 heightfield；每步只做273次查表，
+        # 不再逐点调用 mj_ray（那是键盘测试卡顿的主要来源）。
+        self.field = None
+        if self.scan_dim:
+            TerrainField = importlib.import_module(self.package + '.core.terrain').TerrainField
+            self.field = TerrainField.from_model(
+                self.model, set(np.where(self.robot_geom)[0].tolist()),
+                bounds=((-3., -30.), (21., 30.)))
         self.reset("stairs8")
 
     def reset(self, lane, seed=0):
@@ -185,8 +193,8 @@ class NativeGo2W:
         ox, oy = self.scan_offsets[:, 0], self.scan_offsets[:, 1]
         x, y = self.data.qpos[:2]
         wx, wy = x + c * ox - s * oy, y + s * ox + c * oy
-        h = np.array([terrain_height(self.model, self.data, float(a), float(b))
-                      for a, b in zip(wx, wy)], dtype=np.float32)
+        xy = torch.from_numpy(np.stack((wx, wy), -1).astype(np.float32))
+        h = self.field.sample(xy).numpy()
         scan = np.clip(float(self.data.qpos[2]) - h, -1.5, 1.5).astype(np.float32)
         self.last_scan, self.scan_world = scan, np.stack((wx, wy, h), -1)
         return torch.from_numpy(scan[None])
@@ -255,7 +263,11 @@ class NativeGo2W:
         clearance = float("nan")
         if finite:
             try:
-                clearance = float(z - terrain_height(self.model, self.data, x, y))
+                if self.field is not None:
+                    h = float(self.field.sample(torch.tensor([[x, y]], dtype=torch.float32)).item())
+                else:
+                    h = terrain_height(self.model, self.data, x, y)
+                clearance = float(z - h)
             except RuntimeError:
                 finite = False
         return dict(t=float(self.data.time), x=float(x), y=float(y), z=float(z),
@@ -348,7 +360,7 @@ def _draw_scan(viewer, sim):
     scn.ngeom = 0
     if not sim.scan_show or sim.scan_world is None:
         return
-    for x, y, h in sim.scan_world:
+    for x, y, h in sim.scan_world[::2]:
         t = float(np.clip(h / .55, 0., 1.))
         geom = scn.geoms[scn.ngeom]
         mujoco.mjv_initGeom(geom, mujoco.mjtGeom.mjGEOM_BOX,
@@ -399,9 +411,13 @@ def play(sim, args):
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         viewer.cam.trackbodyid = sim.base
         viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 2.8, 135, -25
+        # 软件 OpenGL（NV-GLX 缺失）下阴影/反射很贵；键盘调试用不到，关掉降低渲染负担。
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_SHADOW] = 0
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_REFLECTION] = 0
         print(f"[就绪] 官方MuJoCo查看器，模型第{sim.checkpoint['step']}轮，场景{args.lane}", flush=True)
         print("按住方向键前后/横移，Q/E转向，松开归零；Space停止；R复位；1..8切赛道；K暂停；H高程显示；Esc退出", flush=True)
         paused = False
+        frame = 0
         while viewer.is_running():
             began = time.monotonic()
             while not events.empty():
@@ -441,19 +457,22 @@ def play(sim, args):
                 h = float(sim.data.qpos[2]) - sim.last_scan
                 scan_text = (f"scan h {h.min():.2f}/{h.max():.2f}/{h.mean():.2f}m | "
                              f"H {'on' if sim.scan_show else 'off'}\n")
-            viewer.set_texts((mujoco.mjtFontScale.mjFONTSCALE_100, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                             f"{sim.robot_id.upper()} {sim.checkpoint['step']} | {sim.lane['name']} | CPU native\n"
-                             "Hold Arrows: vx/vy | Q/E: yaw | Release: stop\nSpace stop  R reset\n"
-                             "1 Flat  2 Stairs4  3 Stairs6  4 Stairs8\n"
-                             "5 Stairs10  6 Stairs12  7 Stairs16  8 Ramp\n"
-                             "9 Stones  0 Tires\nK pause  H scan  Esc exit\n"
-                             f"cmd {commands.round(2)} | vx {row['vx']:.2f} | tilt {row['tilt_degrees']:.1f}\n"
-                             f"support {row['wheel_contacts']} | nonwheel {row['nonwheel_force']:.1f}N\n"
-                             + scan_text
-                             + ("PAUSED" if paused else ""), ""))
-            _draw_scan(viewer, sim)
-            _show_heatmap(sim, args.scan_heatmap, heat)
-            viewer.sync()
+            # 控制器/物理仍50Hz；3D渲染25Hz、热力图10Hz，避免软件GL下过度占用。
+            if frame % 2 == 0:
+                viewer.set_texts((mujoco.mjtFontScale.mjFONTSCALE_100, mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                                 f"{sim.robot_id.upper()} {sim.checkpoint['step']} | {sim.lane['name']} | CPU native\n"
+                                 "Hold Arrows: vx/vy | Q/E: yaw | Release: stop\nSpace stop  R reset\n"
+                                 "1 Flat  2 Stairs4  3 Stairs6  4 Stairs8\n"
+                                 "5 Stairs10  6 Stairs12  7 Stairs16  8 Ramp\n"
+                                 "9 Stones  0 Tires\nK pause  H scan  Esc exit\n"
+                                 f"cmd {commands.round(2)} | vx {row['vx']:.2f} | tilt {row['tilt_degrees']:.1f}\n"
+                                 f"support {row['wheel_contacts']} | nonwheel {row['nonwheel_force']:.1f}N\n"
+                                 + scan_text
+                                 + ("PAUSED" if paused else ""), ""))
+                _draw_scan(viewer, sim)
+                viewer.sync()
+            _show_heatmap(sim, args.scan_heatmap and frame % 5 == 0, heat)
+            frame += 1
             time.sleep(max(0., sim.dt - (time.monotonic() - began)))
     keyboard.close()
     if heat["plt"] is not None:
