@@ -411,9 +411,6 @@ def play(sim, args):
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         viewer.cam.trackbodyid = sim.base
         viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 2.8, 135, -25
-        # 软件 OpenGL（NV-GLX 缺失）下阴影/反射很贵；键盘调试用不到，关掉降低渲染负担。
-        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_SHADOW] = 0
-        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_REFLECTION] = 0
         print(f"[就绪] 官方MuJoCo查看器，模型第{sim.checkpoint['step']}轮，场景{args.lane}", flush=True)
         print("按住方向键前后/横移，Q/E转向，松开归零；Space停止；R复位；1..8切赛道；K暂停；H高程显示；Esc退出", flush=True)
         paused = False
