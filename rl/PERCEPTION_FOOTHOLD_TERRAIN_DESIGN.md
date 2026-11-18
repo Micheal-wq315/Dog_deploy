@@ -185,3 +185,12 @@
 - 根因：Actor 的想象 rollout 里 `survival` 只看倾角；真实 `stone_fall`（root z 相对起点平台下沉 >10cm）没有进入想象 continuation，Actor 在想象里走下桩/平台不会被惩罚。tires 入口普通地面还被 `gap` 持续扣分。
 - 修复：Replay 增加 `origin_z`；`imagine.py` 按 `root_z - origin_z < .10` 把 stones 的 fall 乘入 `cont`；`task.py` 的 `gap` 增加 `high_near`（脚下 0.14m 内有 >0.12m 高面才计 gap）。
 - 验证：8 环境 CPU 烟测 `gap=0`、actor_loss 有限、0 falls；从 `model_5000.pt` 续训，step5050 reward=0.0688、falls=1、velocity_mae=0.056/0.030/0.079、`gap≈0`；命令课程在 5000 晋级 stage2，统计窗口清零属设计行为。
+
+### 10.2 简化地形（2026-11-18）
+
+- 用户要求：停掉 20k，参考 extreme-parkour 的 stepping stones；保留现有平地；所有桩顶在同一平面；先大桩面，后续再减小；轮胎高度从 2cm 起步。
+- stones：平地 + 同平面桩顶，无高起点平台；`side .40→.14`、`gap .04→.16`，桩高=课程 2–16cm。
+- tires：轮胎高度=课程 2–16cm（2/4/6/8/10/12/14/16）。
+- 阈值：`foothold/gap` 的 `on_top/high_near` 从 .12 降到 .01，去掉窄支撑判定；`stair_curriculum` 的 stones/tires 成功阈值同步 .01。
+- 测试场：stones 等平面 .10m + 大桩面；tires 降到 .08m。
+- 新 run：从 `model_18500` 热启动、3072 环境、20k；8 环境 CPU 烟测 falls=0、reward=0.0595、actor_loss 有限。

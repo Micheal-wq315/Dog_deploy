@@ -56,7 +56,7 @@ def curriculum(env, env_ids):
   bridge = getattr(env, '_go2w_posture_bridge', None)
   if bridge is not None:
     world_feet = feet + env.scene.env_origins[env_ids, None, :]
-    on_top = (bridge.field.sample(world_feet[:, :, :2]) > .12).float().mean(-1) > .5
+    on_top = (bridge.field.sample(world_feet[:, :, :2]) > .01).float().mean(-1) > .5
     surface = (types == 6) | (types == 7)
     success = torch.where(surface, success & on_top, success)
   direction=offset[:,0].sign()

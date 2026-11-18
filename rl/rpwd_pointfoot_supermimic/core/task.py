@@ -24,17 +24,16 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
  support=contacts[:,:4] if contacts is not None else torch.sigmoid((.015-clearance)/.008)
  # 只在梅花桩(6)/轮胎(7)启用落脚项，避免平地、台阶上出现常驻 gap 惩罚。
  active=torch.zeros_like(ground[:,0]) if kind is None else ((kind.reshape(-1)==6)|(kind.reshape(-1)==7)).float()
- # 桩顶/胎面算高地面(.12m以上)；再用窄支撑判定排除 1.4m 起点平台：
- # 脚周围 8 个方向 0.14m 内存在 >5cm 落差才算“踩在桩顶/胎面上”。
- on_top=(ground>.12).float()
+ # 桩顶/胎面算高地面；0.01m 阈值覆盖最低 2cm 轮胎，平地仍为 0。
+ # 起点平台已移除，低难度大桩面也应该拿到 foothold，因此不再用窄支撑判定。
+ on_top=(ground>.01).float()
  offsets=ground.new_tensor((( .14,0.),(-.14,0.),(0.,.14),(0.,-.14),
                             (.10,.10),(-.10,.10),(.10,-.10),(-.10,-.10)))
  ring=field.sample(feet[:,:,:2].unsqueeze(2)+offsets)
- narrow=((ground[:,:,None]-ring).amax(-1)>.05).float()
- # 只有脚附近确实存在高桩顶/胎面时才把低支撑判为 gap；否则 tires 入口的
- # 普通地面也会被当成“踩空”，机器人还没走到胎阵就被持续惩罚。
- high_near=(ring>.12).any(-1).float()
- foothold=((on_top*narrow*support).sum(-1)/support.sum(-1).clamp_min(1))*active
+ # 只有脚附近确实存在高桩顶/胎面时才把低支撑判为 gap；否则普通平地也会被
+ # 当成“踩空”，机器人还没走到桩阵/胎阵就被持续惩罚。
+ high_near=(ring>.01).any(-1).float()
+ foothold=((on_top*support).sum(-1)/support.sum(-1).clamp_min(1))*active
  gap=((1-on_top)*support*high_near).mean(-1)*active
  # 前方多点查障碍，只用于训练奖励；Actor不读取地形。
  speed=(command[:,:2].square().sum(-1)+1e-8).sqrt().clamp_min(.05)

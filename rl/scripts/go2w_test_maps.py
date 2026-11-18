@@ -114,18 +114,18 @@ def add_test_park(spec, seed=0, profile="standard", robot_scale=1.0):
                 for iy, yy in enumerate(np.array((-.86, -.43, 0., .43, .86)) * robot_scale):
                     if (ix + iy) % 2:
                         continue
-                    side = (.10 + .015 * (ix % 3)) * robot_scale
-                    height = (.24 + .025 * ((2 * ix + iy) % 8)) * robot_scale
+                    side = .18 * robot_scale
+                    height = .10 * robot_scale  # 桩顶全部同一平面，平地起步
                     box(f"stones_{ix}_{iy}", x + rng.uniform(-.02, .02),
                         y + yy + rng.uniform(-.02, .02), height, side, side, color,
                         yaw=rng.uniform(-.10, .10))
-            lane.update(max_obstacle_height=.43 * robot_scale,
-                        description="梅花桩：细高桩顶、桩间深空隙，需踩桩顶")
+            lane.update(max_obstacle_height=.10 * robot_scale,
+                        description="梅花桩：等平面大桩面，平地起步，先简单后减小桩面")
         elif name == "tires":
             # 轮胎：平躺圆环胎（外径 D、胎孔 d、胎宽 w），多个紧挨成簇；踩胎面，胎孔可踩空。
             D = .40 * robot_scale
             hole = .20 * robot_scale
-            w = .12 * robot_scale
+            w = .08 * robot_scale  # 先低胎面，训练课程从2cm起逐步到16cm
             rmid = (D + hole) / 4
             seg = (D - hole) / 2
             tang = 2 * math.pi * rmid / 12

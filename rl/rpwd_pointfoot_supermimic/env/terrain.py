@@ -97,24 +97,25 @@ class CourseCfg(SubTerrainCfg):
             box(xx+.04,yy-.03,h-half_z,a*.65,b*.65,cap,
                 yaw=yaw+.6,pitch=pitch,shade=.55)
     elif self.kind == "stones":
-      # 梅花桩：细高桩顶、桩间深空隙。大狗点足比 DigDog 大，尺寸按 1.4 左右放大。
-      # 起点平台固定在 x=8，平台顶与同档桩顶齐平；首排桩距离起点 0.9m，贴平台边缘。
-      start_top = .30 + h
-      direct_box(8., sy/2, start_top/2, 1.4, 1.4, start_top, shade=.5)
-      for ix, x in enumerate(np.arange(1.9, 7.1, .56)):
-        for iy, y in enumerate(np.arange(sy/2-1.7, sy/2+1.7, .56)):
+      # 参考 extreme-parkour 的 stepping stones：保留现有平地，桩顶全部同平面，
+      # 低难度大桩面/小间隙，高难度小桩面/大间隙；不再使用高起点平台。
+      span = len(STEP_HEIGHTS) - 1
+      side = .40 - (.40 - .14) * level / span
+      gap = .04 + .12 * level / span
+      step = side + gap
+      for ix, x in enumerate(np.arange(2.0, 7.1, step)):
+        for iy, y in enumerate(np.arange(sy/2-1.7, sy/2+1.7, step)):
           if (ix + iy) % 2:
             continue
-          side = .14 + .01 * (ix % 3)
-          height = .30 + h
           box(x + rng.uniform(-.02, .02), y + rng.uniform(-.02, .02),
-              height/2, side, side, height, yaw=rng.uniform(-.10, .10),
+              h/2, side, side, h, yaw=rng.uniform(-.10, .10),
               shade=rng.uniform(.35, .55))
-      origin[2] = start_top
+      origin[2] = 0.
     elif self.kind == "tires":
-      # 平躺圆环胎：外径 D、胎孔 d、胎宽 w，紧密排列；踩胎面，胎孔可踩空。
+      # 平躺圆环胎：外径 D、胎孔 d、胎宽/高度 w；高度按课程 2–16cm，从简单开始。
       # 8 段 box 近似圆环：视觉仍是带孔轮胎，但静态 geom 只有 12 段方案的 2/3。
-      D, hole, w = .56, .28, .17
+      D, hole = .56, .28
+      w = h  # 轮胎高度=当前档位高度（2/4/6/8/10/12/14/16cm）
       rmid = (D + hole) / 4
       seg = (D - hole) / 2
       tang = 2 * math.pi * rmid / 8
