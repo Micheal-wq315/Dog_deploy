@@ -5,7 +5,7 @@ import mujoco
 import numpy as np
 import torch
 from mjlab.terrains.terrain_generator import SubTerrainCfg, TerrainOutput, TerrainGeometry, TerrainGeneratorCfg
-from mjlab.managers import CurriculumTermCfg, TerminationTermCfg, RewardTermCfg
+from mjlab.managers import CurriculumTermCfg, TerminationTermCfg, RewardTermCfg, EventTermCfg
 from .flat import go2w_velocity_flat_env_cfg
 
 STEP_HEIGHTS = (0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.14, 0.16)
@@ -50,7 +50,9 @@ class CourseCfg(SubTerrainCfg):
       geom = body.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=(x,y,z),
                            size=(a/2,b/2,c/2), quat=(cy,0.,0.,ss))
       geoms.append(TerrainGeometry(geom=geom, color=(shade,shade,.9*shade,1.)))
-    box(sx/2,sy/2,-.1,sx,sy,.2,shade=.6)
+    # stones 区要挖 1m 深坑，不能用整块平地托底；其余地形照旧铺满。
+    if self.kind != "stones":
+      box(sx/2,sy/2,-.1,sx,sy,.2,shade=.6)
     origin = np.array([1., sy/2, 0.])
     if self.kind in ("up", "down"):
       n, tread = 5, self.stair_tread
@@ -97,8 +99,23 @@ class CourseCfg(SubTerrainCfg):
             box(xx+.04,yy-.03,h-half_z,a*.65,b*.65,cap,
                 yaw=yaw+.6,pitch=pitch,shade=.55)
     elif self.kind == "stones":
-      # 参考 extreme-parkour 的 stepping stones：保留现有平地，桩顶全部同平面，
-      # 低难度大桩面/小间隙，高难度小桩面/大间隙；不再使用高起点平台。
+      # 参考 extreme-parkour 的 stepping stones：桩间挖 1m 深坑，桩柱从坑底
+      # 升到统一桩顶面；起点与四周保留平地，机器人从平地直接上桩。低难度
+      # 大桩面/小间隙，高难度小桩面/大间隙；桩顶高度仍取档位 h（2–16cm）。
+      # 只靠平地托底时桩间没有落差，机器人会直接走平地绕过，学不到落脚。
+      pit_depth = 1.0
+      pit_x0, pit_x1 = 1.9, 7.1
+      pit_y0, pit_y1 = sy/2-1.9, sy/2+1.9
+      # 坑底：box() 的双向镜像会自动生成左右两个坑。
+      box((pit_x0+pit_x1)/2, sy/2, -pit_depth-.1,
+          pit_x1-pit_x0, pit_y1-pit_y0, .2, shade=.25)
+      # 平地框：先铺满 16m 见方，再空出两个坑。这里用 direct_box 直接写
+      # 全局坐标，避免 box() 的双向复制把同一条地板叠成两层。
+      for x0, x1 in ((1., pit_x0), (pit_x1, pit_x0+7.), (pit_x1+7., 15.)):
+        direct_box((x0+x1)/2, sy/2, -.1, x1-x0, sy, .2, shade=.6)
+      for y0, y1 in ((0., pit_y0), (pit_y1, sy)):
+        for x0, x1 in ((pit_x0, pit_x1), (pit_x0+7., pit_x1+7.)):
+          direct_box((x0+x1)/2, (y0+y1)/2, -.1, x1-x0, y1-y0, .2, shade=.6)
       span = len(STEP_HEIGHTS) - 1
       side = .40 - (.40 - .14) * level / span
       gap = .04 + .12 * level / span
@@ -108,8 +125,8 @@ class CourseCfg(SubTerrainCfg):
           if (ix + iy) % 2:
             continue
           box(x + rng.uniform(-.02, .02), y + rng.uniform(-.02, .02),
-              h/2, side, side, h, yaw=rng.uniform(-.10, .10),
-              shade=rng.uniform(.35, .55))
+              (h-pit_depth)/2, side, side, h+pit_depth,
+              yaw=rng.uniform(-.10, .10), shade=rng.uniform(.35, .55))
       origin[2] = 0.
     elif self.kind == "tires":
       # 平躺圆环胎：外径 D、胎孔 d、胎宽/高度 w；高度按课程 2–16cm，从简单开始。
@@ -197,7 +214,7 @@ def bidirectional_curriculum(env, env_ids):
 
 def go2w_velocity_terrain_env_cfg(play=False,history=5,seed=0,revision=7,actor_wheel_vel=False,robot='rpwd_pointfoot'):
  from mjlab.sensor import ContactMatch,ContactSensorCfg
- from ..core.stair_curriculum import curriculum
+ from ..core.stair_curriculum import curriculum, mark_surface_reached
  from ..core.collision import illegal_nonwheel_contact
  from ..core.mixed_commands import MixedVelocityCommandCfg
  cfg=go2w_velocity_flat_env_cfg(play,history,False,robot)
@@ -215,6 +232,8 @@ def go2w_velocity_terrain_env_cfg(play=False,history=5,seed=0,revision=7,actor_w
   secondary=ContactMatch(mode='body',pattern='terrain'),
   fields=('found','force'),reduce='netforce',num_slots=1,history_length=cfg.decimation))
  cfg.events['reset_base'].params['pose_range'].update(x=(-.1,.1),y=(-.1,.1),yaw=(-.08,.08))
+ # 每一步锁存“踩在桩顶/胎面越过终点线”，reset 时课程再消费，避免出口踩空。
+ cfg.events['surface_reached']=EventTermCfg(mode='step',func=mark_surface_reached)
  cfg.episode_length_s=35.
  cfg.terminations['course_exit']=TerminationTermCfg(func=bidirectional_exit,time_out=True)
  cfg.terminations['stone_fall']=TerminationTermCfg(func=stone_fall,time_out=False)

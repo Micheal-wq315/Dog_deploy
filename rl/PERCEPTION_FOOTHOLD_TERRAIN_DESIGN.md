@@ -194,3 +194,14 @@
 - 阈值：`foothold/gap` 的 `on_top/high_near` 从 .12 降到 .01，去掉窄支撑判定；`stair_curriculum` 的 stones/tires 成功阈值同步 .01。
 - 测试场：stones 等平面 .10m + 大桩面；tires 降到 .08m。
 - 新 run：从 `model_18500` 热启动、3072 环境、20k；8 环境 CPU 烟测 falls=0、reward=0.0595、actor_loss 有限。
+
+### 10.3 梅花桩 1m 深坑（2026-11-18）
+
+- 用户指出 10.2 的 stones 桩高只有 2–16cm、桩脚坐在平地上，桩间空隙深度为 0；extreme-parkour 的 `stepping_stones_terrain(..., depth=-1)` 是 1m 深坑。
+- 训练 `env/terrain.py`：stones 区不再铺整块平地；左右两个桩阵各挖 1m 深坑，桩柱从 -1m 升到统一桩顶（2–16cm），中央起点与四周保留平地。
+- `TerrainField.from_model` 的高度场初值从 0 改为 -2m：原来用 `np.maximum`，0 初值会把 -1m 坑底吞掉；现在坑底 -1m 能被 scan/奖励看到。
+- `TerrainField.scan` 保持 `state + ground_under_base - sample`：`TerrainBridge.state` 的 z 是相对脚下地面的高度，不能直接当世界高度；测试脚本的 `qpos[2]-h` 与它等价。
+- stones/tires 成功判定：新增 `mark_surface_reached` step 事件锁存“踩在桩顶/胎面越过终点线”的瞬间，reset 时课程再消费；出口在桩/胎区边缘，reset 瞬间前脚可能已踩到平地，不锁存会把真正通过的回合判成 0 pass。
+- 测试场：`add_test_park` 的 plane 改为带孔 box 地板（plane 无法开孔），stones lane 桩柱从 -1m 升到 .10m，坑深 1m；`pointfoot_mujoco` 高度场 bounds 改为 (-18,-30)..(18,30)。
+- 验证：8 环境 CPU 检查 stones 桩间 -1.0m、桩顶 .02m、起点/四周平地 0m，scan 最大 1.37m（能看到坑）；原生测试场桩间 -1.0m、桩顶 .10m；`mark_surface_reached` step 事件正常创建 latch；py_compile 通过。
+- 训练：从 `model_18500` 热启动、3072 环境、40000 轮。

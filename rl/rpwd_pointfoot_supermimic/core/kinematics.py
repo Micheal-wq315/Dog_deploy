@@ -40,6 +40,7 @@ def foot_state(state,pose,field,geometry):
  body=feet_body(state,geometry);delta=torch.zeros_like(state);delta[:,10:22]=state[:,22:34]*.001
  velocity=(feet_body(state+delta,geometry)-body)/.001
  velocity=velocity+state[:,None,4:7]+torch.cross(state[:,None,7:10].expand_as(body),body,dim=-1)
+ # TerrainBridge.state 的 z 相对脚下地面，加回 ground 得到世界机身高度。
  rotated=rotate_world(body,state,pose);ground=field.sample(pose[:,:2])
  world=torch.cat((pose[:,None,:2]+rotated[:,:,:2],(state[:,:1]+ground[:,None]+rotated[:,:,2]).unsqueeze(-1)),-1)
  return body,world,rotate_world(velocity,state,pose)

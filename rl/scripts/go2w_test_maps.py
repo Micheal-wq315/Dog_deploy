@@ -19,11 +19,27 @@ def add_test_park(spec, seed=0, profile="standard", robot_scale=1.0):
               (.62, .52, .42), (.62, .42, .73), (.68, .58, .33), (.55, .70, .48),
               (.30, .32, .35))
     world = spec.worldbody
-    # MuJoCo 的 mj_ray 只覆盖 plane 的 size 半宽；13 条 lane 最外侧在 y=±24，
-    # 原 24m 半宽会让轮胎 lane 的测高射线一出边界就判定 nonfinite。
-    world.add_geom(name="test_ground", type=mujoco.mjtGeom.mjGEOM_PLANE,
-                   size=(18., 30., .1), rgba=(.24, .28, .32, 1), group=0,
-                   contype=1, conaffinity=1, condim=3, friction=(.8, .02, .001))
+    # 梅花桩区要挖 1m 深坑，plane 无法开孔，因此整块地面改用 box 拼；
+    # 其余 lane 仍是 z=0 平地。stones 坑两侧留出实心地面作为坑壁。
+    stones_y = (LANES.index("stones") - (len(LANES) - 1) / 2) * 4.
+    pit_x0, pit_x1, pit_y0, pit_y1 = 2.1, 6.9, stones_y - 1., stones_y + 1.
+
+    def ground_box(name, x0, x1, y0, y1, height=1.):
+        world.add_geom(name="test_ground_" + name, type=mujoco.mjtGeom.mjGEOM_BOX,
+                       pos=((x0 + x1) / 2, (y0 + y1) / 2, -height / 2),
+                       size=((x1 - x0) / 2, (y1 - y0) / 2, height / 2),
+                       rgba=(.24, .28, .32, 1), group=0, contype=1, conaffinity=1,
+                       condim=3, friction=(.8, .02, .001))
+
+    ground_box("left", -18., pit_x0, -30., 30.)
+    ground_box("right", pit_x1, 18., -30., 30.)
+    ground_box("front", pit_x0, pit_x1, -30., pit_y0)
+    ground_box("back", pit_x0, pit_x1, pit_y1, 30.)
+    world.add_geom(name="test_pit_floor", type=mujoco.mjtGeom.mjGEOM_BOX,
+                   pos=((pit_x0 + pit_x1) / 2, stones_y, -1.1),
+                   size=((pit_x1 - pit_x0) / 2, (pit_y1 - pit_y0) / 2, .1),
+                   rgba=(.16, .19, .22, 1), group=0, contype=1, conaffinity=1,
+                   condim=3, friction=(.8, .02, .001))
     world.add_light(name="test_sun", pos=(0, 0, 10), dir=(-.3, -.2, -1),
                     type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
                     castshadow=False, diffuse=(.8, .8, .8))
@@ -107,7 +123,7 @@ def add_test_park(spec, seed=0, profile="standard", robot_scale=1.0):
                     .35, .50, 1.05, color)
             lane.update(description="遥控绕障；需要操作者选择路线，盲策略没有自主避障输入")
         elif name == "stones":
-            # 梅花桩：细高桩，桩顶小、桩间深空隙；机器人必须踩桩顶。
+            # 梅花桩：细高桩，桩顶小、桩间 1m 深坑；机器人必须踩桩顶。
             # robot_scale 让大狗点足与 DigDog 共用同一套测试场。
             step = .42 * robot_scale
             for ix, x in enumerate(np.arange(2.3, 6.7, step)):
@@ -116,11 +132,12 @@ def add_test_park(spec, seed=0, profile="standard", robot_scale=1.0):
                         continue
                     side = .18 * robot_scale
                     height = .10 * robot_scale  # 桩顶全部同一平面，平地起步
+                    # 桩柱从坑底 -1m 升到统一桩顶，坑深 1m。
                     box(f"stones_{ix}_{iy}", x + rng.uniform(-.02, .02),
-                        y + yy + rng.uniform(-.02, .02), height, side, side, color,
-                        yaw=rng.uniform(-.10, .10))
+                        y + yy + rng.uniform(-.02, .02), height + 1., side, side, color,
+                        yaw=rng.uniform(-.10, .10), base=-1.)
             lane.update(max_obstacle_height=.10 * robot_scale,
-                        description="梅花桩：等平面大桩面，平地起步，先简单后减小桩面")
+                        description="梅花桩：等平面大桩面，1m 深坑，平地起步，先简单后减小桩面")
         elif name == "tires":
             # 轮胎：平躺圆环胎（外径 D、胎孔 d、胎宽 w），多个紧挨成簇；踩胎面，胎孔可踩空。
             D = .40 * robot_scale

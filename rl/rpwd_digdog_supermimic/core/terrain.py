@@ -31,6 +31,8 @@ class TerrainField:
     c,s = pose[:,2:3].cos(),pose[:,2:3].sin()
     dx,dy = self.offsets[:,0],self.offsets[:,1]
     xy = pose[:,None,:2]+torch.stack((c*dx-s*dy,s*dx+c*dy),-1)
+    # TerrainBridge.state 的 z 是“相对脚下地面”的高度，加回 sample(pose)
+    # 才是世界机身高度；再减采样点地形高度得到该点相对机身的高度。
     return (state[:,:1]+self.sample(pose[:,:2])[:,None]-self.sample(xy)).clamp(-1.5,1.5)
 
   @classmethod
@@ -45,9 +47,10 @@ class TerrainField:
     """Rasterize exact oriented boxes in small bounding rectangles, no per-pixel rays.
 
     Shared CPU build is ~6 MB at 4 cm for a 48 x 48 m atlas. No robot geometry.
-    Only static box courses are supported; planes are treated as z=0. Pass
-    ``bounds=((x0,y0),(x1,y1))`` for native test parks whose flat ground is a
-    plane outside the box bounding rectangle.
+    Only static box courses are supported; the default height is -2 m so that
+    a 1 m deep pit is not silently filled by the zero initializer. Pass
+    ``bounds=((x0,y0),(x1,y1))`` for native test parks whose flat ground extends
+    outside the box bounding rectangle.
     """
     import mujoco
     data = mujoco.MjData(model)
@@ -82,7 +85,7 @@ class TerrainField:
       lo=np.asarray(bounds[0],dtype=np.float64)
       hi=np.asarray(bounds[1],dtype=np.float64)
     shape=np.ceil((hi-lo)/resolution).astype(int)+1
-    heights=np.zeros((shape[1],shape[0]),dtype=np.float32)
+    heights=np.full((shape[1],shape[0]),-2.,dtype=np.float32)
     for center,rot,size,low,high in boxes:
       start=np.maximum(0,np.floor((low[:2]-lo)/resolution).astype(int))
       end=np.minimum(shape,np.ceil((high[:2]-lo)/resolution).astype(int)+1)

@@ -37,6 +37,31 @@ def stair_pass(offset, gravity, level, up):
           & (gravity[:, :2].norm(dim=-1) < .4))
 
 
+def mark_surface_reached(env, env_ids=None):
+  """锁存“已经踩在桩顶/胎面到达终点线”的瞬间。
+
+  课程只在 reset 时统计成功，而 stones/tires 的出口在桩/胎区边缘，reset 时
+  前脚往往已经踩到平地；不锁存会把真正踩过去的回合计成 0 pass。
+  """
+  bridge = getattr(env, '_go2w_posture_bridge', None)
+  if bridge is None:
+    return
+  if not hasattr(env, '_surface_reached'):
+    env._surface_reached = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+  if not hasattr(env, '_surface_feet'):
+    env._surface_feet, _ = env.scene['robot'].find_bodies(
+        tuple(f'{x}_foot_link' for x in ('FL', 'FR', 'RL', 'RR')), preserve_order=True)
+  types = env.scene.terrain.terrain_types
+  active = env.episode_length_buf > 0
+  fallen = env.termination_manager.terminated
+  offset = env.scene['robot'].data.root_link_pos_w - env.scene.env_origins
+  feet = env.scene['robot'].data.body_link_pos_w[:, env._surface_feet]
+  on_top = (bridge.field.sample(feet[:, :, :2]) > .01).float().mean(-1) > .5
+  reached = (((types == 6) | (types == 7)) & active & ~fallen
+             & (offset[:, 0].abs() > 5.4) & (offset[:, 1].abs() < 6.5) & on_top)
+  env._surface_reached |= reached
+
+
 def curriculum(env, env_ids):
   stats = buffers(env)
   terrain = env.scene.terrain
@@ -53,12 +78,19 @@ def curriculum(env, env_ids):
   foot_ids,_=env.scene['robot'].find_bodies(tuple(f'{x}_foot_link' for x in ('FL','FR','RL','RR')),preserve_order=True)
   feet=d.body_link_pos_w[env_ids][:,foot_ids]-env.scene.env_origins[env_ids,None,:]
   # stones/tires 不允许在平地上绕过：至少一半支撑脚要落在桩顶/胎面(高地面)。
+  # 出口在桩/胎区边缘，reset 瞬间前脚可能已落到平地；用 step 事件锁存的
+  # “踩在桩顶/胎面越过终点线”补充判定，避免真正通过的回合被判 0 pass。
+  surface = (types == 6) | (types == 7)
   bridge = getattr(env, '_go2w_posture_bridge', None)
   if bridge is not None:
     world_feet = feet + env.scene.env_origins[env_ids, None, :]
     on_top = (bridge.field.sample(world_feet[:, :, :2]) > .01).float().mean(-1) > .5
-    surface = (types == 6) | (types == 7)
-    success = torch.where(surface, success & on_top, success)
+    reached = getattr(env, '_surface_reached', None)
+    if reached is not None:
+      success = torch.where(surface, (success & on_top) | reached[env_ids], success)
+      reached[env_ids] = False
+    else:
+      success = torch.where(surface, success & on_top, success)
   direction=offset[:,0].sign()
   rear_clear=(feet[:,:,0]*direction[:,None]).amin(-1)>2.65
   top=top & rear_clear

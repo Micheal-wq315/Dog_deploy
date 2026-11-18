@@ -146,14 +146,13 @@ class NativeGo2W:
         self.last_scan = None
         self.scan_world = None
         self.scan_show = True
-        # 启动时把测试场静态几何栅格化成 heightfield；每步只做273次查表，
+        # 启动时把测试场静态几何栅格化成 heightfield；每步只做查表，
         # 不再逐点调用 mj_ray（那是键盘测试卡顿的主要来源）。
-        self.field = None
-        if self.scan_dim:
-            TerrainField = importlib.import_module(self.package + '.core.terrain').TerrainField
-            self.field = TerrainField.from_model(
-                self.model, set(np.where(self.robot_geom)[0].tolist()),
-                bounds=((-3., -30.), (21., 30.)))
+        # 盲模型也要建：训练 TerrainBridge 的 state z 是相对脚下地面的高度。
+        TerrainField = importlib.import_module(self.package + '.core.terrain').TerrainField
+        self.field = TerrainField.from_model(
+            self.model, set(np.where(self.robot_geom)[0].tolist()),
+            bounds=((-18., -30.), (18., 30.)))
         self.reset("stairs8")
 
     def reset(self, lane, seed=0):
@@ -177,8 +176,11 @@ class NativeGo2W:
 
     def state(self):
         r = self.data.xmat[self.base].reshape(3, 3)
+        # 与训练 TerrainBridge 一致：state z 相对脚下地面，不是世界高度。
+        ground = float(self.field.sample(
+            torch.from_numpy(self.data.qpos[:2].astype(np.float32)[None])).item())
         # 自由关节前三维速度在世界系，角速度在根刚体系。
-        return np.concatenate(([self.data.qpos[2]], r.T @ np.array([0., 0., -1.]),
+        return np.concatenate(([self.data.qpos[2] - ground], r.T @ np.array([0., 0., -1.]),
                                r.T @ self.data.qvel[:3], self.data.qvel[3:6],
                                self.data.qpos[self.qadr[:12]] - self.default[:12],
                                self.data.qvel[self.vadr[:12]], np.array([math.sin(2*math.pi*1.5*self.data.time),math.cos(2*math.pi*1.5*self.data.time)]))).astype(np.float32)
