@@ -99,8 +99,9 @@ class NativeGo2W:
         self.cfg.scene.terrain, self.cfg.scene.sensors = None, ()
         self.cfg.scene.spec_fn = None
         self.scene = Scene(self.cfg.scene, device="cpu")
-        # 大狗点足比 DigDog 大：桩/胎环按 1.4 缩放；台阶/坡道仍按 profile 的真实高度。
-        self.map = add_test_park(self.scene.spec, seed, profile, robot_scale=1.4)
+        # 与训练场和 PDF 保持同一尺寸：不再把桩/胎环放大 1.4 倍，
+        # 否则键盘测试的方块 280mm、缝隙 7cm，和训练用的 200mm、5cm 对不上。
+        self.map = add_test_park(self.scene.spec, seed, profile, robot_scale=1.0)
         self.model = self.scene.compile()
         self.cfg.sim.mujoco.apply(self.model)
         # 把实际求解器参数同步到可导出的 MJCF，而非只修改内存中的模型。
