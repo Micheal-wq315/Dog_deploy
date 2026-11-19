@@ -97,21 +97,27 @@ class CourseCfg(SubTerrainCfg):
             box(xx+.04,yy-.03,h-half_z,a*.65,b*.65,cap,
                 yaw=yaw+.6,pitch=pitch,shade=.55)
     elif self.kind == "stones":
-      # 用户要求：桩顶与中央平台恒定 1m 并齐平；地面 0，桩间空隙 1m 深。
-      # 平面尺寸从简单开始：方块 0.40→0.20，横/纵间隙 3/5cm→PDF 的 200/400mm。
-      top = 1.0
+      # 用户要求：桩顶与中央平台恒定 1m 并齐平。按 PDF 的相对几何，方块/平台厚度
+      # 只有 100mm；若把 1m 高的桩直接立在 0 地面上，3–5cm 窄缝会变成 1m 深槽，
+      # 4.4cm 的脚会掉进去卡死（v5/v6 实测每回合都在平台上 stall）。
+      # 因此整片 stones 区做 0.9m 基座，方块是基座上的 100mm 薄块：顶面 1m 齐平，
+      # 桩间空隙只有 100mm 深，与 PDF 一致。
+      top, thick = 1.0, .10
+      base = top - thick
       span = len(STEP_HEIGHTS) - 1
       side = .40 - (.40 - .20) * level / span
       gap_x = .05 + (.40 - .05) * level / span
       gap_y = .03 + (.20 - .03) * level / span
       # 中央起点平台 1.2m，顶面与桩顶齐平；左右桩阵由 box() 双向镜像生成。
       direct_box(8., sy/2, top/2, 1.2, sy, top, shade=.6)
+      direct_box(4.45, sy/2, base/2, 5.9, 4.0, base, shade=.42)
+      direct_box(11.55, sy/2, base/2, 5.9, 4.0, base, shade=.42)
       for ix, x in enumerate(np.arange(1.8, 7.1, side+gap_x)):
         for iy, y in enumerate(np.arange(sy/2-1.7, sy/2+1.7, side+gap_y)):
           if (ix + iy) % 2:
             continue
           box(x + rng.uniform(-.02, .02), y + rng.uniform(-.02, .02),
-              top/2, side, side, top, yaw=rng.uniform(-.10, .10),
+              base + thick/2, side, side, thick, yaw=rng.uniform(-.10, .10),
               shade=rng.uniform(.35, .55))
       origin[2] = top
     elif self.kind == "tires":
