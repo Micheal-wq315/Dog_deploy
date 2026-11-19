@@ -200,7 +200,7 @@ def go2w_velocity_terrain_env_cfg(play=False,history=5,seed=0,revision=7,actor_w
  cfg.events['reset_base'].params['pose_range'].update(x=(-.1,.1),y=(-.1,.1),yaw=(-.08,.08))
  cfg.episode_length_s=35.
  cfg.terminations['course_exit']=TerminationTermCfg(func=bidirectional_exit,time_out=True)
- cfg.terminations['illegal_nonwheel_contact']=TerminationTermCfg(func=illegal_nonwheel_contact,params={'force_threshold':15.})
+ cfg.terminations['illegal_nonwheel_contact']=TerminationTermCfg(func=illegal_nonwheel_contact,params={'force_threshold':15.,'surface_force_threshold':50.})
  if not play:
   cfg.curriculum={'course':CurriculumTermCfg(func=curriculum)}
   cfg.commands['twist']=MixedVelocityCommandCfg(**vars(cfg.commands['twist']))

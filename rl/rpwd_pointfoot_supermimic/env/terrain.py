@@ -229,7 +229,7 @@ def go2w_velocity_terrain_env_cfg(play=False,history=5,seed=0,revision=7,actor_w
  cfg.terminations['stone_fall']=TerminationTermCfg(func=stone_fall,time_out=False)
  # stones/tires 前进指令下 3 秒无 +0.1m 进展即判失败，不再等 35 秒超时。
  cfg.terminations['surface_stall']=TerminationTermCfg(func=surface_stall,time_out=False)
- cfg.terminations['illegal_nonwheel_contact']=TerminationTermCfg(func=illegal_nonwheel_contact,params={'force_threshold':15.})
+ cfg.terminations['illegal_nonwheel_contact']=TerminationTermCfg(func=illegal_nonwheel_contact,params={'force_threshold':15.,'surface_force_threshold':50.})
  if not play:
   cfg.curriculum={'course':CurriculumTermCfg(func=curriculum)}
   cfg.commands['twist']=MixedVelocityCommandCfg(**vars(cfg.commands['twist']))
