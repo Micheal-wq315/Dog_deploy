@@ -115,22 +115,20 @@ class CourseCfg(SubTerrainCfg):
               shade=rng.uniform(.35, .55))
       origin[2] = top
     elif self.kind == "tires":
-      # 平躺圆环胎：外径 D、胎孔 d、胎宽/高度 w；高度按课程 2–16cm，从简单开始。
-      # 8 段 box 近似圆环：视觉仍是带孔轮胎，但静态 geom 只有 12 段方案的 2/3。
-      D, hole = .56, .28
-      w = h  # 轮胎高度=当前档位高度（2/4/6/8/10/12/14/16cm）
+      # 按 PDF 165/70R13：外径 550mm、内径 330mm、胎面宽 165mm，8 胎平躺成 2×4 矩阵。
+      # 训练赛道沿 x 排 8 列、y 排 2 行（4.4m×1.1m 的轮胎带），左右桩阵由 box() 双向镜像。
+      # 12 段 box 近似圆环，胎面孔隙可见、可踩空；胎高固定 165mm，不再随课程升高。
+      D, hole, w = .55, .33, .165
       rmid = (D + hole) / 4
       seg = (D - hole) / 2
-      tang = 2 * math.pi * rmid / 8
-      for ix, x in enumerate(np.arange(2.6, 7.1, D * .95)):
-        for iy, y in enumerate(np.arange(sy/2-1.7, sy/2+1.7, D * .95)):
-          if (ix + iy) % 2:
-            continue
-          cx, cy = x + rng.uniform(-.02, .02), y + rng.uniform(-.02, .02)
-          for k in range(8):
-            ang = 2 * math.pi * k / 8
+      tang = 2 * math.pi * rmid / 12
+      for ix, x in enumerate(np.arange(2.7 + D/2, 7.1, D)):
+        for iy, y in enumerate((sy/2 - D/2, sy/2 + D/2)):
+          cx, cy = x + rng.uniform(-.01, .01), y + rng.uniform(-.01, .01)
+          for k in range(12):
+            ang = 2 * math.pi * k / 12
             box(cx + rmid*math.cos(ang), cy + rmid*math.sin(ang), w/2,
-                seg, tang, w, yaw=ang, shade=rng.uniform(.25, .4))
+                seg, tang, w, yaw=ang, shade=rng.uniform(.22, .38))
     elif self.kind != "flat":
       raise ValueError(self.kind)
     if self.bidirectional:

@@ -155,7 +155,7 @@ class NativeGo2W:
         TerrainField = importlib.import_module(self.package + '.core.terrain').TerrainField
         self.field = TerrainField.from_model(
             self.model, set(np.where(self.robot_geom)[0].tolist()),
-            bounds=((-18., -30.), (18., 30.)))
+            bounds=((-18., -44.), (18., 44.)))
         self.reset("stairs8")
 
     def reset(self, lane, seed=0):

@@ -123,6 +123,11 @@ class TerrainField:
       b = -2. * dot_xy * axis[2]
       c = dx * dx + dy * dy - dot_xy * dot_xy - radius * radius
       if abs(a) < 1e-9:
+        # 竖直圆柱（绕桩杆等）：竖直线直接落在圆盘内，顶面为常数。
+        inside = dx * dx + dy * dy <= radius * radius
+        surface = np.where(inside, center[2] + np.sign(axis[2]) * half, 0.)
+        patch = heights[start[1]:end[1], start[0]:end[0]]
+        np.maximum(patch, surface, out=patch)
         continue
       disc = b * b - 4. * a * c
       valid = disc >= 0.
