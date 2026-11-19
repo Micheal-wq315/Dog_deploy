@@ -97,28 +97,46 @@ class CourseCfg(SubTerrainCfg):
             box(xx+.04,yy-.03,h-half_z,a*.65,b*.65,cap,
                 yaw=yaw+.6,pitch=pitch,shade=.55)
     elif self.kind == "stones":
-      # 用户要求：桩顶与中央平台恒定 1m 并齐平。按 PDF 的相对几何，方块/平台厚度
-      # 只有 100mm；若把 1m 高的桩直接立在 0 地面上，3–5cm 窄缝会变成 1m 深槽，
-      # 4.4cm 的脚会掉进去卡死（v5/v6 实测每回合都在平台上 stall）。
-      # 因此整片 stones 区做 0.9m 基座，方块是基座上的 100mm 薄块：顶面 1m 齐平，
-      # 桩间空隙只有 100mm 深，与 PDF 一致。
-      top, thick = 1.0, .10
+      # PDF 表 1 梅花桩：两排、每排 3 块、中心对称；上排首块距平台 100mm、
+      # 下排 400mm，同排间距 400mm、两排间距 200mm。用户要求顶面恒定 1m 且与
+      # 平台齐平：方块/平台是 0.9m 基座上的 100mm 薄块，缝隙深 100mm，脚不会卡死。
+      # 课程从简单开始：方块 0.40→0.20，同排缝 5→40cm，两排缝 3→20cm，
+      # 首块缝 5→10cm，两排错位 3→30cm；上排首块始终在前进方向的左脚侧。
+      top, thick, plat = 1.0, .10, .80
       base = top - thick
       span = len(STEP_HEIGHTS) - 1
-      side = .40 - (.40 - .20) * level / span
-      gap_x = .05 + (.40 - .05) * level / span
-      gap_y = .03 + (.20 - .03) * level / span
-      # 中央起点平台 1.2m，顶面与桩顶齐平；左右桩阵由 box() 双向镜像生成。
+      t = level / span
+      side = .40 - .20 * t
+      gap_same = .05 + .35 * t
+      gap_row = .03 + .17 * t
+      gap_near = .05 + .05 * t
+      delta = .03 + .27 * t
+      field = 3 * side + 2 * gap_same + 2 * gap_near + delta
+      module = field + plat
+      # 基座只比桩阵略宽，避免在桩阵外侧留出可绕行的 0.9m 台阶。
+      base_w = max(plat, 2 * side + gap_row + .02)
       direct_box(8., sy/2, top/2, 1.2, sy, top, shade=.6)
-      direct_box(4.45, sy/2, base/2, 5.9, 4.0, base, shade=.42)
-      direct_box(11.55, sy/2, base/2, 5.9, 4.0, base, shade=.42)
-      for ix, x in enumerate(np.arange(1.8, 7.1, side+gap_x)):
-        for iy, y in enumerate(np.arange(sy/2-1.7, sy/2+1.7, side+gap_y)):
-          if (ix + iy) % 2:
-            continue
-          box(x + rng.uniform(-.02, .02), y + rng.uniform(-.02, .02),
-              base + thick/2, side, side, thick, yaw=rng.uniform(-.10, .10),
-              shade=rng.uniform(.35, .55))
+      for d in (1., -1.):
+        edge = 8. + d * .6
+        n = 0
+        while n < 3 and abs(edge + d * (n + 1) * module - 8.) <= 7.4:
+          n += 1
+        if n == 0:
+          continue
+        length = n * module
+        direct_box(edge + d * length / 2, sy/2, base / 2, length, base_w, base, shade=.42)
+        for m in range(n):
+          start = edge + d * m * module
+          # 上排首块在前进方向的左脚侧：d=+1 → +y；d=-1 → -y。
+          row_a = sy/2 + d * (side + gap_row) / 2
+          row_b = sy/2 - d * (side + gap_row) / 2
+          for row, off in ((row_a, gap_near), (row_b, gap_near + delta)):
+            for k in range(3):
+              xc = start + d * (off + side / 2 + k * (side + gap_same))
+              direct_box(xc, row, base + thick / 2, side, side, thick,
+                         shade=rng.uniform(.35, .55))
+          direct_box(start + d * (field + plat / 2), sy/2, top / 2, plat, plat, top,
+                     shade=.6)
       origin[2] = top
     elif self.kind == "tires":
       # 按 PDF 165/70R13：外径 550mm、内径 330mm、胎面宽 165mm，8 胎平躺成 2×4 矩阵。

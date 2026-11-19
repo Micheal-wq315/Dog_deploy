@@ -214,28 +214,34 @@ def add_test_park(spec, seed=0, profile="standard", robot_scale=1.0):
             # 按用户要求：桩柱/平台恒定 1m，顶面与平台齐平；地面 0，桩间空隙 1m 深。
             # 平面尺寸按 PDF（200×200 方块 + 800×800 平台），间隙取训练课程最简单一档：
             # 横向 5cm、纵向 3cm，随难度逐步加到 PDF 的 200/400mm。
+            # PDF 表 1 梅花桩：200×200×100 方块 + 两块 800×800×100 平台，
+            # 两排各 3 块，整体中心对称；上排首个方块距平台 100mm、下排 400mm，
+            # 同排间距 400mm、两排间距 200mm，总长 3500mm。
+            # 顶面仍按用户要求恒定 1m 且齐平；方块坐在 0.9m 基座上，缝隙深 100mm。
+            # 上排靠近平台的第一块在 +y（狗面朝 +x 时的左脚侧），方便先上左脚。
             top, thick, plat = 1.0, .10, .80 * robot_scale
-            base = top - thick  # 0.9m 基座，方块/平台是 100mm 薄块（PDF 相对几何）
+            base = top - thick
             side = .20 * robot_scale
-            gap_x, gap_y = .05 * robot_scale, .03 * robot_scale
+            gap_same, gap_row = .40 * robot_scale, .20 * robot_scale
+            gap_near, delta = .10 * robot_scale, .30 * robot_scale
             x0 = 2.3
-            pitch_x, pitch_y = side + gap_x, side + gap_y
-            columns = np.arange(x0 + plat + pitch_x / 2, x0 + plat + 4 * pitch_x, pitch_x)
-            rows = np.arange(y - .46, y + .47, pitch_y)
-            end_x = x0 + plat + 4 * pitch_x + gap_x
-            field = end_x + plat
-            box("stones_base", (x0 + field) / 2, y, base, field - x0, 1.4 * robot_scale,
+            field = 3 * side + 2 * gap_same + 2 * gap_near + delta
+            total = plat + field + plat
+            base_w = max(plat, 2 * side + gap_row + .02 * robot_scale)
+            box("stones_base", x0 + total / 2, y, base, total, base_w,
                 tuple(c * .55 for c in color))
             box("stones_start", x0 + plat / 2, y, thick, plat, plat, color, base=base)
-            for ix, x in enumerate(columns):
-                for iy, yy in enumerate(rows):
-                    if (ix + iy) % 2:
-                        continue
-                    box(f"stones_{ix}_{iy}", x, yy, thick, side, side, color, base=base)
-            box("stones_end", end_x + plat / 2, y, thick, plat, plat, color, base=base)
+            box("stones_end", x0 + total - plat / 2, y, thick, plat, plat, color, base=base)
+            row_up = y + (side + gap_row) / 2
+            row_dn = y - (side + gap_row) / 2
+            for k in range(3):
+                xu = x0 + plat + gap_near + side / 2 + k * (side + gap_same)
+                xd = x0 + plat + gap_near + delta + side / 2 + k * (side + gap_same)
+                box(f"stones_up{k}", xu, row_up, thick, side, side, color, base=base)
+                box(f"stones_dn{k}", xd, row_dn, thick, side, side, color, base=base)
             lane.update(spawn=[x0 + plat / 2, y, top + .40],
-                        goal_x=field, max_obstacle_height=top,
-                        description="1m 齐平梅花桩：0.9m 基座 + 100mm 方块/平台，桩间空隙 100mm 深；横隙 5cm、纵隙 3cm 起步")
+                        goal_x=x0 + total, max_obstacle_height=top,
+                        description="PDF 梅花桩：200×200 方块、平台 800，首块距台 100/400mm、同排 400、两排 200，上排首块在左脚侧")
         elif name == "tires":
             # PDF 165/70R13 常见轮胎：外径约 550mm、内径约 330mm、胎面宽 165mm；
             # 8 个轮胎平躺组成 2×4 矩阵（短边 1100mm、长边 2200mm）。
