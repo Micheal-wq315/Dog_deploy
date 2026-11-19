@@ -65,10 +65,10 @@ def mark_surface_reached(env, env_ids=None):
 
 
 def surface_stall(env):
-  """stones/tires 在前进指令下 3 秒没有 +0.1m 进展即判失败。
+  """stones/tires 3 秒没有 +0.1m x 进展即判失败，不再区分指令方向。
 
-  旧行为是等 35 秒超时，超时不计 pass/fall，策略学会站在 1.2m 小岛上拖时间；
-  现在把它作为真正的失败终止，配合速度跟踪门控，逼迫机器人继续上桩。
+  旧行为只对前进指令生效，混合指令里的停止/横移仍然可以拖到 35 秒超时；
+  v4 对所有指令都要求持续推进，配合速度跟踪门控逼迫机器人上桩。
   """
   buffers(env)
   types = env.scene.terrain.terrain_types
@@ -77,14 +77,12 @@ def surface_stall(env):
   progress = offset[:, 0].abs()
   improve = progress > env._surface_best_x + .1
   env._surface_best_x = torch.where(improve, progress, env._surface_best_x)
-  command = env.command_manager.get_command('twist')
-  moving = command[:, 0].abs() > .1
   active = env.episode_length_buf > 0
   env._stair_stall_time = torch.where(
-      surface & moving & active & ~improve,
+      surface & active & ~improve,
       env._stair_stall_time + env.step_dt,
       torch.zeros_like(env._stair_stall_time))
-  stuck = surface & moving & active & (env._stair_stall_time > 3.)
+  stuck = surface & active & (env._stair_stall_time > 3.)
   env._stair_stuck = stuck
   return stuck
 
@@ -100,6 +98,7 @@ def curriculum(env, env_ids):
   stairs = (types == 1) | (types == 2)
   active = env.episode_length_buf[env_ids] > 0
   fallen = env.termination_manager.terminated[env_ids]
+  time_outs = env.termination_manager.time_outs[env_ids]
   success = (offset[:, 0].abs() > 5.4) & (offset[:, 1].abs() < 6.5)
   top = stair_pass(offset, d.projected_gravity_b[env_ids], levels, types == 1)
   foot_ids,_=env.scene['robot'].find_bodies(tuple(f'{x}_foot_link' for x in ('FL','FR','RL','RR')),preserve_order=True)
@@ -143,14 +142,16 @@ def curriculum(env, env_ids):
   # Landing contacts rule out simply jumping through the clearance test.
   contact = (env.scene['wheel_ground_contact'].data.force[env_ids].reshape(len(env_ids),-1,3)[:,:,2] < -8.).sum(-1) >= 2
   success = torch.where(stairs, top & contact, success) & active & ~fallen
+  # stones/tires 的 35 秒超时也按失败处理；真正越过终点线的回合仍记 pass。
+  failed = fallen | (surface & time_outs & ~success)
   command = env.command_manager.get_command('twist')[env_ids]
   traversal = (command[:, 0].abs() > .1) & (command[:, 1:].abs().amax(-1) < .05)
   trials = (~stairs | traversal) & active & ((env.episode_length_buf[env_ids] * env.step_dt >= 5.) | fallen)
-  values = torch.stack((trials, success & trials, fallen & trials,
+  values = torch.stack((trials, success & trials, failed & trials,
                         env._stair_stuck[env_ids] & trials), -1).float()
   stats.view(-1, 4).index_add_(0, types * len(HEIGHTS) + levels, values)
   record_recent(env, levels, types, trials, values[:, 1], env._stair_episode_stage[env_ids])
-  terrain.terrain_levels[env_ids] = (levels + success.long() - (active & fallen).long()).clamp(0, len(HEIGHTS) - 1)
+  terrain.terrain_levels[env_ids] = (levels + success.long() - (active & failed).long()).clamp(0, len(HEIGHTS) - 1)
   if hasattr(env, '_stair_probe_mask') and env._stair_stage < len(HEIGHTS) - 2:
     pinned = env._stair_probe_mask[env_ids]
     terrain.terrain_levels[env_ids[pinned]] = env._stair_stage + 1

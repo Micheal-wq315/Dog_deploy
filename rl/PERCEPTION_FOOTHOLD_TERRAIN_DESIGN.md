@@ -222,3 +222,11 @@
 - 速度跟踪门控：`surface_gate = 1 - 0.8*active*(1-on_top_frac)`，stones/tires 在平地/小岛上只能拿 20% 的线性/角速度跟踪奖励，脚真正上桩顶/胎面才恢复 100%。
 - 验证：8 环境 stones 原地 150 次调用后 `stall_time 3.02s`、`stuck=True`；tires 环境因当前指令非前进未触发；`surface_diag` 带 `stall` 字段；`py_compile` 通过。
 - 训练：从 v2 `model_7500` 热启动、3072 环境、40000 轮。
+
+### 10.6 全指令停留终止与超时算失败（2026-11-19）
+
+- v3b 到 22.6k 时 stones 仍 0 pass：累计 3773 回合，2286 掉坑 / 1484 超时 / 968 停留 / 3 出口，`end_x 0.509`、`on_top 0.385` 进入平台期；超时仍占 39.3%，停留终止只覆盖前进指令，停止/横移仍可拖时间。
+- v4：`surface_stall` 不再区分指令方向，stones/tires 只要 3 秒没有 +0.1m x 进展就判失败；`curriculum` 把 stones/tires 的 35 秒 timeout 也按失败处理（`time_outs & ~success`），真正越过终点线的回合仍记 pass。
+- 保留速度跟踪 on_top 门控、1.2m 小岛、贴边第一排桩、foothold/gap 权重。
+- 验证：8 环境 `surface_stall` 150 次后 stones/tires 均 `stall_time 3.02s`；单 `env_id` 调 `curriculum` 和 stall 诊断通过；`py_compile` 通过。
+- 训练：从 v3b `model_22500` 热启动、3072 环境、40000 轮。
