@@ -58,7 +58,9 @@ def mark_surface_reached(env, env_ids=None):
   fallen = env.termination_manager.terminated
   offset = env.scene['robot'].data.root_link_pos_w - env.scene.env_origins
   feet = env.scene['robot'].data.body_link_pos_w[:, env._surface_feet]
-  on_top = (bridge.field.sample(feet[:, :, :2]) > .01).float().mean(-1) > .5
+  # 梅花桩顶面 1.0m、缝隙底座 0.9m：只有 >0.95 才算踩在桩顶。
+  thr = torch.where(types == 6, feet.new_tensor(.95), feet.new_tensor(.01))[:, None]
+  on_top = (bridge.field.sample(feet[:, :, :2]) > thr).float().mean(-1) > .5
   reached = (((types == 6) | (types == 7)) & active & ~fallen
              & (offset[:, 0].abs() > 5.4) & (offset[:, 1].abs() < 6.5) & on_top)
   env._surface_reached |= reached
@@ -111,7 +113,9 @@ def curriculum(env, env_ids):
   bridge = getattr(env, '_go2w_posture_bridge', None)
   if bridge is not None:
     world_feet = feet + env.scene.env_origins[env_ids, None, :]
-    on_top_frac = (bridge.field.sample(world_feet[:, :, :2]) > .01).float().mean(-1)
+    thr = torch.where(types == 6, world_feet.new_tensor(.95),
+                      world_feet.new_tensor(.01))[:, None]
+    on_top_frac = (bridge.field.sample(world_feet[:, :, :2]) > thr).float().mean(-1)
     on_top = on_top_frac > .5
     reached = getattr(env, '_surface_reached', None)
     if reached is not None:
