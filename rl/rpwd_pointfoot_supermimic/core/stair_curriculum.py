@@ -67,10 +67,11 @@ def mark_surface_reached(env, env_ids=None):
 
 
 def surface_stall(env):
-  """stones/tires 3 秒没有 +0.1m x 进展即判失败，不再区分指令方向。
+  """stones/tires 5 秒没有 +0.1m x 进展即判失败，不再区分指令方向。
 
   旧行为只对前进指令生效，混合指令里的停止/横移仍然可以拖到 35 秒超时；
   v4 对所有指令都要求持续推进，配合速度跟踪门控逼迫机器人上桩。
+  3 秒对 1m 高桩太急，策略刚抬脚就被重置；放宽到 5 秒留出尝试时间。
   """
   buffers(env)
   types = env.scene.terrain.terrain_types
@@ -84,7 +85,7 @@ def surface_stall(env):
       surface & active & ~improve,
       env._stair_stall_time + env.step_dt,
       torch.zeros_like(env._stair_stall_time))
-  stuck = surface & active & (env._stair_stall_time > 3.)
+  stuck = surface & active & (env._stair_stall_time > 5.)
   env._stair_stuck = stuck
   return stuck
 

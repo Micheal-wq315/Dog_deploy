@@ -35,7 +35,9 @@ def reward_terms(state,action,previous,command,c,survival_prob,scan=None,pose=No
  # 只有脚附近确实存在高桩顶/胎面时才把低支撑判为 gap；否则普通平地也会被
  # 当成“踩空”，机器人还没走到桩阵/胎阵就被持续惩罚。
  high_near=(ring>thr[:,:,None]).any(-1).float()
- foothold=((on_top*support).sum(-1)/support.sum(-1).clamp_min(1))*active
+ # 站着不动不应刷 foothold：否则策略会停在 1m 起点平台上反复重置。
+ speed=state[:,4:7].norm(dim=-1)
+ foothold=((on_top*support).sum(-1)/support.sum(-1).clamp_min(1))*active*(speed>.08).float()
  gap=((1-on_top)*support*high_near).mean(-1)*active
  # 过桩进度/绕行惩罚：只有脚真正落在桩顶/胎面时前进才加分；在中央小岛或
  # 两侧平地上前进会被扣分，避免策略靠拖时间/绕行拿速度跟踪奖励。

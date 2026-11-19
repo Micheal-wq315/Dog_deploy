@@ -115,9 +115,11 @@ class CourseCfg(SubTerrainCfg):
       module = field + plat
       # 基座只比桩阵略宽，避免在桩阵外侧留出可绕行的 0.9m 台阶。
       base_w = max(plat, 2 * side + gap_row + .02)
-      direct_box(8., sy/2, top/2, 1.2, sy, top, shade=.6)
+      # 中央起点平台按 PDF 做成 800×800，而不是整条 16m 宽的安全台，
+      # 否则策略可以一直站在平台上刷 foothold / 速度跟踪。
+      direct_box(8., sy/2, top/2, .8, .8, top, shade=.6)
       for d in (1., -1.):
-        edge = 8. + d * .6
+        edge = 8. + d * .4
         n = 0
         while n < 3 and abs(edge + d * (n + 1) * module - 8.) <= 7.4:
           n += 1
