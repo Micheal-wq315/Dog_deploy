@@ -55,6 +55,8 @@ class TerrainField:
     import mujoco
     data = mujoco.MjData(model)
     mujoco.mj_forward(model,data)
+    # 有 plane 的场景默认地面 0；没有 plane 的训练赛道默认 -2，才能保留深坑。
+    has_plane = any(int(t) == int(mujoco.mjtGeom.mjGEOM_PLANE) for t in model.geom_type)
     corners = np.array([[a,b,c] for a in (-1,1) for b in (-1,1) for c in (-1,1)])
     boxes, cylinders = [], []
     for i in range(model.ngeom):
@@ -85,7 +87,7 @@ class TerrainField:
       lo=np.asarray(bounds[0],dtype=np.float64)
       hi=np.asarray(bounds[1],dtype=np.float64)
     shape=np.ceil((hi-lo)/resolution).astype(int)+1
-    heights=np.full((shape[1],shape[0]),-2.,dtype=np.float32)
+    heights=np.full((shape[1],shape[0]),0. if has_plane else -2.,dtype=np.float32)
     for center,rot,size,low,high in boxes:
       start=np.maximum(0,np.floor((low[:2]-lo)/resolution).astype(int))
       end=np.minimum(shape,np.ceil((high[:2]-lo)/resolution).astype(int)+1)

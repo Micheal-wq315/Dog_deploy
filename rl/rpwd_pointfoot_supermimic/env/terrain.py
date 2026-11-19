@@ -50,9 +50,7 @@ class CourseCfg(SubTerrainCfg):
       geom = body.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=(x,y,z),
                            size=(a/2,b/2,c/2), quat=(cy,0.,0.,ss))
       geoms.append(TerrainGeometry(geom=geom, color=(shade,shade,.9*shade,1.)))
-    # stones 区要挖 1m 深坑，不能用整块平地托底；其余地形照旧铺满。
-    if self.kind != "stones":
-      box(sx/2,sy/2,-.1,sx,sy,.2,shade=.6)
+    box(sx/2,sy/2,-.1,sx,sy,.2,shade=.6)
     origin = np.array([1., sy/2, 0.])
     if self.kind in ("up", "down"):
       n, tread = 5, self.stair_tread
@@ -99,38 +97,23 @@ class CourseCfg(SubTerrainCfg):
             box(xx+.04,yy-.03,h-half_z,a*.65,b*.65,cap,
                 yaw=yaw+.6,pitch=pitch,shade=.55)
     elif self.kind == "stones":
-      # 参考 extreme-parkour 的 stepping stones：桩间挖 1m 深坑，桩柱从坑底
-      # 升到统一桩顶面；中央起点小岛 1.2m（原 1.8m，减少原地停留空间），
-      # 四周保留平地。低难度大桩面/小间隙，高难度小桩面/大间隙；桩顶高度
-      # 仍取档位 h（2–16cm）。只靠平地托底时桩间没有落差，机器人会直接走
-      # 平地绕过，学不到落脚。
-      pit_depth = 1.0
-      pit_x0, pit_x1 = 1.6, 7.4
-      pit_y0, pit_y1 = sy/2-1.9, sy/2+1.9
-      # 坑底：box() 的双向镜像会自动生成左右两个坑；两坑之间就是 1.2m 小岛。
-      box((pit_x0+pit_x1)/2, sy/2, -pit_depth-.1,
-          pit_x1-pit_x0, pit_y1-pit_y0, .2, shade=.25)
-      # 平地框：先铺满 16m 见方，再空出两个坑。这里用 direct_box 直接写
-      # 全局坐标，避免 box() 的双向复制把同一条地板叠成两层。
-      for x0, x1 in ((1., pit_x0), (pit_x1, pit_x0+7.), (pit_x1+7., 15.)):
-        direct_box((x0+x1)/2, sy/2, -.1, x1-x0, sy, .2, shade=.6)
-      for y0, y1 in ((0., pit_y0), (pit_y1, sy)):
-        for x0, x1 in ((pit_x0, pit_x1), (pit_x0+7., pit_x1+7.)):
-          direct_box((x0+x1)/2, (y0+y1)/2, -.1, x1-x0, y1-y0, .2, shade=.6)
+      # 用户要求：桩顶与中央平台恒定 1m 并齐平；地面 0，桩间空隙 1m 深。
+      # 平面尺寸从简单开始：方块 0.40→0.20，横/纵间隙 3/5cm→PDF 的 200/400mm。
+      top = 1.0
       span = len(STEP_HEIGHTS) - 1
-      side = .40 - (.40 - .14) * level / span
-      gap = .04 + .12 * level / span
-      step = side + gap
-      # 从 1.8 起步让第一排桩正好贴住 1.2m 小岛边缘（镜像后 7.2m/8.8m），
-      # 机器人从岛上直接上桩，不需要跨 0.2m 的坑。
-      for ix, x in enumerate(np.arange(1.8, 7.1, step)):
-        for iy, y in enumerate(np.arange(sy/2-1.7, sy/2+1.7, step)):
+      side = .40 - (.40 - .20) * level / span
+      gap_x = .05 + (.40 - .05) * level / span
+      gap_y = .03 + (.20 - .03) * level / span
+      # 中央起点平台 1.2m，顶面与桩顶齐平；左右桩阵由 box() 双向镜像生成。
+      direct_box(8., sy/2, top/2, 1.2, sy, top, shade=.6)
+      for ix, x in enumerate(np.arange(1.8, 7.1, side+gap_x)):
+        for iy, y in enumerate(np.arange(sy/2-1.7, sy/2+1.7, side+gap_y)):
           if (ix + iy) % 2:
             continue
           box(x + rng.uniform(-.02, .02), y + rng.uniform(-.02, .02),
-              (h-pit_depth)/2, side, side, h+pit_depth,
-              yaw=rng.uniform(-.10, .10), shade=rng.uniform(.35, .55))
-      origin[2] = 0.
+              top/2, side, side, top, yaw=rng.uniform(-.10, .10),
+              shade=rng.uniform(.35, .55))
+      origin[2] = top
     elif self.kind == "tires":
       # 平躺圆环胎：外径 D、胎孔 d、胎宽/高度 w；高度按课程 2–16cm，从简单开始。
       # 8 段 box 近似圆环：视觉仍是带孔轮胎，但静态 geom 只有 12 段方案的 2/3。
