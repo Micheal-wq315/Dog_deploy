@@ -107,18 +107,25 @@ def add_test_park(spec, seed=0, profile="standard", robot_scale=1.0):
             lane.update(description="遥控绕障；需要操作者选择路线，盲策略没有自主避障输入")
         elif name == "stones":
             # 按用户要求：桩柱/平台恒定 1m，顶面与平台齐平；地面 0，桩间空隙 1m 深。
-            # 平面尺寸仍按 PDF：200×200 方块 + 800×800 平台，间隙 100/200/400mm。
+            # 平面尺寸按 PDF（200×200 方块 + 800×800 平台），间隙取训练课程最简单一档：
+            # 横向 5cm、纵向 3cm，随难度逐步加到 PDF 的 200/400mm。
             top, side, plat = 1.0, .20 * robot_scale, .80 * robot_scale
+            gap_x, gap_y = .05 * robot_scale, .03 * robot_scale
             x0 = 2.3
             box("stones_start", x0 + plat / 2, y, top, plat, plat, color)
-            box("stones_end", x0 + 3.5 - plat / 2, y, top, plat, plat, color)
-            for yy, xs in ((y + .2 * robot_scale, (x0 + .9, x0 + 1.5)),
-                           (y - .2 * robot_scale, (x0 + 1.2, x0 + 1.8))):
-                for k, x in enumerate(xs):
-                    box(f"stones_{k}_{yy:.2f}", x + side / 2, yy, top, side, side, color)
+            pitch_x, pitch_y = side + gap_x, side + gap_y
+            columns = np.arange(x0 + plat + pitch_x / 2, x0 + plat + 4 * pitch_x, pitch_x)
+            rows = np.arange(y - .46, y + .47, pitch_y)
+            for ix, x in enumerate(columns):
+                for iy, yy in enumerate(rows):
+                    if (ix + iy) % 2:
+                        continue
+                    box(f"stones_{ix}_{iy}", x, yy, top, side, side, color)
+            end_x = x0 + plat + 4 * pitch_x + gap_x
+            box("stones_end", end_x + plat / 2, y, top, plat, plat, color)
             lane.update(spawn=[x0 + plat / 2, y, top + .40],
-                        goal_x=x0 + 3.5, max_obstacle_height=top,
-                        description="按 PDF：200×200×100 方块 + 800×800×100 平台，顶面同平面 100mm，间隙 100/200/400mm")
+                        goal_x=end_x + plat, max_obstacle_height=top,
+                        description="1m 齐平梅花桩：200×200 方块 + 800×800 平台，横隙 5cm、纵隙 3cm 起步（训练最简单档）")
         elif name == "tires":
             # 轮胎：平躺圆环胎（外径 D、胎孔 d、胎宽 w），多个紧挨成簇；踩胎面，胎孔可踩空。
             D = .40 * robot_scale

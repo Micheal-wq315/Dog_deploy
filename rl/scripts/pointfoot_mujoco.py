@@ -24,6 +24,9 @@ import torch
 from go2w_test_maps import LANES, PROFILES, add_test_park, terrain_height
 
 BASE = Path("/media/rmer/系统/rpwd_training/pointfoot_mjlab")
+# 数据盘“系统”偶发未挂载或只读（NTFS 脏位），检查点可读但测试产物写不进去；
+# 写盘失败时回退到同内容的可写数据盘，避免键盘测试刚加载完模型就 mkdir 崩溃。
+OUTPUT_BASE = BASE if os.access(BASE, os.W_OK) else Path("/media/rmer/data/rpwd_training/pointfoot_mjlab")
 
 
 def latest_checkpoint():
@@ -515,7 +518,7 @@ def main(checkpoint_finder=None, output_base=None, expected_robot=None, policy_b
     del ckpt
     if args.output is None:
         stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d_%H-%M-%S")
-        args.output = (output_base or BASE) / "native_tests" / f"{stamp}_{args.mode}_{metadata['step']}"
+        args.output = (output_base or OUTPUT_BASE) / "native_tests" / f"{stamp}_{args.mode}_{metadata['step']}"
     args.output.mkdir(parents=True, exist_ok=False)
     report = dict(checkpoint=str(args.checkpoint), checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
                   model_step=metadata["step"], engine="MuJoCo native CPU", mujoco_version=mujoco.__version__,
